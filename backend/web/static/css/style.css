@@ -1,0 +1,716 @@
+/* ==========================================================
+   沟通牌 - 现代化视觉重构
+   仅改外观：牌面精灵图定位类(.card-*)与布局锚点保持不变
+   ========================================================== */
+
+:root {
+  --gold: #f0c05a;
+  --gold-deep: #c99a3a;
+  --felt: #1d6a4f;       /* 绒布中心色，images/desktop.svg 的 tableFelt 起点与之一致 */
+  --felt-deep: #0e3a26;  /* 绒布边缘色，同上（也是 .table-felt 的兜底色） */
+  --ink: #1f2d3d;
+  --accent: #22b8cf;
+  --danger: #ff7043;
+  --panel: rgba(255, 255, 255, 0.08);
+  --panel-line: rgba(255, 255, 255, 0.16);
+}
+
+/* ==========================================================
+   牌桌几何 —— 唯一真源
+   ----------------------------------------------------------
+   桌面 = 木质桌沿（纯 CSS：.table-rim）+ 绒布（纹理来自 images/desktop.svg：.table-felt）。
+   房间内所有绝对定位的锚点都以 --room-pad 为基准内缩，所以调整桌沿厚度
+   只需要改下面这几个变量，不必再去逐个改 8 个头像 + 8 个牌列 + 8 个出牌区。
+
+     --table-edge = 屏幕边缘 → 绒布边缘
+     --room-pad   = 屏幕边缘 → 头像/牌列的基准线（= 绒布边缘 + 头像与桌沿的间距）
+
+   注意：各锚点里写的是"相对旧版 22px 基准的偏移"（例如 old 100px → 78px + pad），
+   因为 22px 是上一版 20px 桌沿时代的内缩量。
+   ========================================================== */
+:root {
+  --table-margin: clamp(10px, 1.1vh, 18px);   /* 桌子离屏幕边缘（露出房间地面） */
+  --table-rim: clamp(30px, 4vh, 50px);        /* 木质桌沿厚度 */
+  --table-radius: clamp(22px, 3.2vh, 40px);   /* 绒布圆角（内沿） */
+  --table-radius-outer: calc(var(--table-radius) + var(--table-rim));
+  --table-edge: calc(var(--table-margin) + var(--table-rim));
+  --seat-gap: 8px;                            /* 头像离绒布边缘的间距 */
+  --room-pad: calc(var(--table-edge) + var(--seat-gap));
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+[v-cloak] { display: none; }
+
+/* ---------------- 通用按钮 ---------------- */
+button {
+  cursor: pointer;
+  outline: none;
+  border: none;
+  color: #fff;
+  padding: 8px 22px;
+  font-size: 15px;
+  border-radius: 8px;
+  font-family: inherit;
+  background: linear-gradient(180deg, #2ec7e0, #1596ad);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+button:hover { filter: brightness(1.08); transform: translateY(-1px); }
+button:active { transform: translateY(0); filter: brightness(.95); }
+
+.input {
+  height: 42px;
+  line-height: 42px;
+  border: 1px solid var(--panel-line);
+  border-radius: 8px;
+  vertical-align: top;
+  padding: 0 14px;
+  font-size: 15px;
+  outline: none;
+  background: #fff;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(34, 184, 207, 0.25);
+}
+
+/* ---------------- 登录页 ---------------- */
+.full-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+.login-wrapper {
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(34, 184, 207, 0.35), transparent 60%),
+    radial-gradient(900px 500px at 90% 110%, rgba(240, 192, 90, 0.18), transparent 60%),
+    linear-gradient(160deg, #17324a 0%, #10222f 55%, #0b1822 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-panel {
+  width: 360px;
+  padding: 40px 36px 34px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+
+.login-logo {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.login-panel .title {
+  color: #fff;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 4px;
+  padding: 0 0 6px;
+  margin: 0 0 4px;
+}
+
+.login-sub {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  margin: 0 0 26px;
+}
+
+.login-form { margin-bottom: 16px; white-space: nowrap; }
+.login-form .input { width: 100%; }
+.login-form button { width: 100%; padding: 11px 0; font-size: 16px; letter-spacing: 6px; }
+.login-tip { color: rgba(255, 255, 255, 0.45); font-size: 12px; margin-top: 14px; }
+
+/* ---------------- 大厅 ---------------- */
+.house {
+  background:
+    radial-gradient(1000px 500px at 50% -10%, rgba(255, 255, 255, 0.06), transparent 60%),
+    linear-gradient(170deg, #243b53 0%, #1b2d40 60%, #14212e 100%);
+  padding-top: 52px;
+}
+
+.quick-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  padding: 9px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(9, 18, 26, 0.85);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+.quick-bar .brand {
+  color: var(--gold);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 3px;
+}
+
+.lobby-container {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 26px 30px 60px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.desk {
+  position: relative;
+  height: 200px;
+  width: 200px;
+  margin: 22px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.position { position: absolute; }
+
+.position-image {
+  height: 50px;
+  width: 50px;
+  display: block;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, transform .15s ease;
+}
+.position-image:hover {
+  border-color: var(--accent);
+  background: rgba(34, 184, 207, 0.18);
+  transform: scale(1.06);
+}
+
+.position-image.has,
+.position-image.has2 {
+  cursor: default;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+.position-image.has { background-image: url('/images/qq.png'); background-repeat: no-repeat; background-position: center; background-size: contain; }
+.position-image.has2 { background-image: url('/images/qq-ok.png'); background-repeat: no-repeat; background-position: center; background-size: contain; }
+.position-image.has:hover, .position-image.has2:hover { transform: none; border-color: rgba(255,255,255,.25); box-shadow: none; }
+
+.position-text {
+  color: rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  width: 50px;
+  font-size: 12px;
+  text-align: center;
+  margin-top: 3px;
+}
+
+.position0 { top: 4px; left: 0; }
+.position1 { top: 75px; left: 0; }
+.position2 { top: 146px; left: 0; }
+.position3 { top: 146px; left: 75px; }
+.position4 { top: 146px; left: 150px; }
+.position5 { top: 75px; left: 150px; }
+.position6 { top: 4px; left: 150px; }
+.position7 { top: 4px; left: 75px; }
+
+.position-center {
+  border-radius: 50%;
+  width: 62px;
+  height: 62px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-image: url('/images/desk.png');
+  background-size: 60px;
+  background-position: center;
+  background-repeat: no-repeat;
+  line-height: 66px;
+  text-align: center;
+  color: var(--gold);
+  font-weight: bold;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* ---------------- 房间 / 牌桌 ---------------- */
+/* 房间地面：四周是深色木地板，中间摆一张牌桌（有投影地"坐"在地面上） */
+.room {
+  overflow: hidden;
+  background:
+    radial-gradient(140% 120% at 50% -20%, #3a2a1c 0%, #241a11 45%, #120c07 100%);
+}
+
+/* 木质桌沿。
+   造型要点：靠 padding 把中间让给绒布；外圆角 = 内圆角 + 桌沿厚，所以两者同心。
+   木纹用两层 linear-gradient 叠出来：一层上下渐变当"顶光"（上亮下暗 → 有厚度），
+   一层 1~2px 的重复条纹当拉丝。 */
+.table-rim {
+  position: fixed;
+  top: var(--table-margin);
+  right: var(--table-margin);
+  bottom: var(--table-margin);
+  left: var(--table-margin);
+  box-sizing: border-box;
+  padding: var(--table-rim);
+  border-radius: var(--table-radius-outer);
+  background-color: #6b4626;
+  background-image:
+    /* 顶光：上沿提亮、下沿压暗，做出圆雕厚度 */
+    linear-gradient(180deg,
+      rgba(255, 226, 178, 0.34) 0%,
+      rgba(255, 226, 178, 0.06) 16%,
+      rgba(0, 0, 0, 0) 42%,
+      rgba(0, 0, 0, 0.34) 82%,
+      rgba(0, 0, 0, 0.48) 100%),
+    /* 木纹拉丝 */
+    repeating-linear-gradient(178deg,
+      rgba(255, 255, 255, 0.05) 0 1px,
+      rgba(0, 0, 0, 0.06) 1px 2px,
+      rgba(0, 0, 0, 0) 2px 7px),
+    /* 木料底色 */
+    linear-gradient(180deg, #7b5230 0%, #8b5a2b 22%, #6a4523 58%, #3e2716 100%);
+  box-shadow:
+    0 26px 60px rgba(0, 0, 0, 0.62),      /* 桌面投在地面上的影子 */
+    0 6px 16px rgba(0, 0, 0, 0.45),
+    inset 0 2px 0 rgba(255, 238, 206, 0.28),  /* 上沿高光 */
+    inset 0 -3px 0 rgba(0, 0, 0, 0.5);        /* 下沿暗部 */
+}
+
+/* 绒布：纹理（底色渐变 + 绒毛噪点 + 暗角）来自 images/desktop.svg，
+   这里是"嵌进木框里"的凹陷感 —— 一圈接缝 + 上沿更重的内阴影。 */
+.table-felt {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--table-radius);
+  background-color: var(--felt-deep);
+  background-image: url('/images/desktop.svg');
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: 100% 100%;
+  box-shadow:
+    inset 0 0 0 2px rgba(0, 0, 0, 0.45),   /* 绒布与木框的接缝 */
+    inset 0 12px 28px rgba(0, 0, 0, 0.45), /* 上沿更重的凹陷阴影（假想光源在上方） */
+    inset 0 -10px 24px rgba(0, 0, 0, 0.34);
+}
+
+/* 记分区 */
+.feng-system {
+  position: fixed;
+  bottom: 50%;
+  left: 50%;
+  z-index: 999;
+  transform: translateX(-50%);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  backdrop-filter: blur(6px);
+  min-width: 320px;
+}
+.feng-system p {
+  padding: 9px 22px;
+  margin: 0;
+  font-size: 14px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.feng-system p + p { border-top: 1px solid rgba(255, 255, 255, 0.08); }
+
+/* 系统按钮组 */
+.btn-system {
+  position: fixed;
+  bottom: 50%;
+  left: 50%;
+  z-index: 999;
+  transform: translate(-50%, 190px);
+  display: flex;
+  gap: 14px;
+}
+.btn-exit-room {
+  background: linear-gradient(180deg, #ffab5e, #f57c00);
+}
+.btn-prepare {
+  background: linear-gradient(180deg, #2ee08a, #0f9d58);
+  font-weight: 600;
+  letter-spacing: 2px;
+  padding: 8px 34px;
+}
+
+/* 出牌按钮组 */
+.btn-group {
+  position: absolute;
+  bottom: calc(228px + var(--room-pad));
+  text-align: center;
+  width: 100%;
+  left: 0;
+  vertical-align: middle;
+  z-index: 999;
+}
+.btn-group > * { vertical-align: middle; }
+.btn-group .btn {
+  min-width: 110px;
+  padding: 10px 26px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  margin: 0 8px;
+}
+.btn-group .btn-call {
+  background: linear-gradient(180deg, #ffd86b, #e6a823);
+  color: #5c3d00;
+  text-shadow: 0 1px 0 rgba(255,255,255,.35);
+}
+.btn-call + .btn-call { margin-left: 15px; }
+
+.score-tipe {
+  color: #7bffb0;
+  font-size: 30px;
+  font-weight: 700;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  display: inline-block;
+  white-space: nowrap;
+  line-height: 120px;
+}
+
+.clock {
+  background: url('/images/clock.png') no-repeat center;
+  background-size: contain;
+  width: 58px;
+  height: 60px;
+  display: inline-block;
+  margin-top: -1px;
+  text-align: center;
+  color: #81681c;
+  line-height: 60px;
+  font-weight: bold;
+  font-size: 18px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+}
+
+.text-tips {
+  color: rgba(255, 255, 255, 0.9);
+  position: absolute;
+  bottom: -25px;
+  font-size: 13px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.text-tips-left { left: 0; }
+.text-tips-right { right: 0; }
+.text-right { text-align: right; }
+.text-left { text-align: left; }
+.text-center { text-align: center; }
+
+.icon-group { position: absolute; top: -55px; }
+.icon-group-right { right: 10px; }
+.icon-group-left { left: 10px; }
+
+/* ---------------- 牌 ---------------- */
+.card {
+  height: 120px;
+  width: 90px;
+  display: inline-block;
+  font-weight: bold;
+  background-image: url('/images/poker.png');
+  background-repeat: no-repeat;
+  overflow: hidden;
+  position: absolute;
+  top: 0;
+  border-radius: 6px;
+  box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.4);
+  transition: top .12s ease;
+}
+
+.card-group { position: fixed; height: 120px; width: 50%; }
+
+.card-group-p3 {
+  bottom: calc(78px + var(--room-pad));
+  left: 50%;
+  z-index: 999;
+  transform: translateX(-50%);
+  transition: width 0.2s;
+}
+.card-group-p3 .card { cursor: pointer; }
+
+.card-group-p0 { top: calc(78px + var(--room-pad)); left: calc(78px + var(--room-pad)); }
+.card-group-p1 { top: 50%; left: calc(78px + var(--room-pad)); margin-top: -60px; }
+.card-group-p2 { bottom: calc(78px + var(--room-pad)); left: calc(78px + var(--room-pad)); }
+.card-group-p4 { bottom: calc(78px + var(--room-pad)); right: calc(78px + var(--room-pad)); }
+.card-group-p5 { top: 50%; right: calc(78px + var(--room-pad)); margin-top: -60px; }
+.card-group-p6 { top: calc(78px + var(--room-pad)); right: calc(78px + var(--room-pad)); }
+.card-group-p7 { top: calc(78px + var(--room-pad)); left: 50%; transform: translateX(-50%); }
+
+.card-ctx { position: absolute; height: 120px; }
+.card-ctx .card { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
+.card-ctx-p3 { bottom: calc(278px + var(--room-pad)); left: 50%; z-index: 999; transform: translateX(-50%); }
+.card-ctx-p0 { top: calc(198px + var(--room-pad)); left: calc(278px + var(--room-pad)); }
+.card-ctx-p1 { top: 50%; left: calc(278px + var(--room-pad)); margin-top: -60px; }
+.card-ctx-p2 { bottom: calc(198px + var(--room-pad)); left: calc(278px + var(--room-pad)); }
+.card-ctx-p4 { bottom: calc(198px + var(--room-pad)); right: calc(278px + var(--room-pad)); }
+.card-ctx-p5 { top: 50%; margin-top: -60px; right: calc(278px + var(--room-pad)); }
+.card-ctx-p6 { top: calc(198px + var(--room-pad)); right: calc(278px + var(--room-pad)); }
+.card-ctx-p7 { top: calc(198px + var(--room-pad)); left: 50%; z-index: 999; transform: translateX(-50%); }
+
+/* 牌面精灵定位（保持原始坐标，勿动） */
+.card-14-0 { background-position: 0 0; }
+.card-14-1 { background-position: 0 -120px; }
+.card-14-2 { background-position: 0 -240px; }
+.card-14-3 { background-position: 0 -360px; }
+
+.card-15-0 { background-position: -90px 0; }
+.card-15-1 { background-position: -90px -120px; }
+.card-15-2 { background-position: -90px -240px; }
+.card-15-3 { background-position: -90px -360px; }
+
+.card-3-0 { background-position: -180px 0; }
+.card-3-1 { background-position: -180px -120px; }
+.card-3-2 { background-position: -180px -240px; }
+.card-3-3 { background-position: -180px -360px; }
+
+.card-4-0 { background-position: -270px 0; }
+.card-4-1 { background-position: -270px -120px; }
+.card-4-2 { background-position: -270px -240px; }
+.card-4-3 { background-position: -270px -360px; }
+
+.card-5-0 { background-position: -360px 0; }
+.card-5-1 { background-position: -360px -120px; }
+.card-5-2 { background-position: -360px -240px; }
+.card-5-3 { background-position: -360px -360px; }
+
+.card-6-0 { background-position: -450px 0; }
+.card-6-1 { background-position: -450px -120px; }
+.card-6-2 { background-position: -450px -240px; }
+.card-6-3 { background-position: -450px -360px; }
+
+.card-7-0 { background-position: -540px 0; }
+.card-7-1 { background-position: -540px -120px; }
+.card-7-2 { background-position: -540px -240px; }
+.card-7-3 { background-position: -540px -360px; }
+
+.card-8-0 { background-position: -630px 0; }
+.card-8-1 { background-position: -630px -120px; }
+.card-8-2 { background-position: -630px -240px; }
+.card-8-3 { background-position: -630px -360px; }
+
+.card-9-0 { background-position: -720px 0; }
+.card-9-1 { background-position: -720px -120px; }
+.card-9-2 { background-position: -720px -240px; }
+.card-9-3 { background-position: -720px -360px; }
+
+.card-10-0 { background-position: -810px 0; }
+.card-10-1 { background-position: -810px -120px; }
+.card-10-2 { background-position: -810px -240px; }
+.card-10-3 { background-position: -810px -360px; }
+
+.card-11-0 { background-position: -900px 0; }
+.card-11-1 { background-position: -900px -120px; }
+.card-11-2 { background-position: -900px -240px; }
+.card-11-3 { background-position: -900px -360px; }
+
+.card-12-0 { background-position: -990px 0; }
+.card-12-1 { background-position: -990px -120px; }
+.card-12-2 { background-position: -990px -240px; }
+.card-12-3 { background-position: -990px -360px; }
+
+.card-13-0 { background-position: -1080px 0; }
+.card-13-1 { background-position: -1080px -120px; }
+.card-13-2 { background-position: -1080px -240px; }
+.card-13-3 { background-position: -1080px -360px; }
+
+.card-16-0 { background-position: -90px -480px; }
+.card-17-0 { background-position: 0 -480px; }
+.card-unknow { background-position: -180px -480px; }
+
+/* ---------------- 玩家头像 ---------------- */
+.screen-center {
+  position: fixed;
+  top: 50%;
+  left: 0;
+  height: 100%;
+  width: 100%;
+  transform: translateY(-50%);
+}
+
+.player-wrapper {
+  height: 100px;
+  width: 100px;
+  color: #fff;
+  position: absolute;
+}
+
+.player-photo {
+  width: 100%;
+  height: 64px;
+  background-image: url('../images/qq.png');
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.player-photo-king { background-image: url('../images/qq-king.png') !important; }
+
+.player-name {
+  font-size: 14px;
+  line-height: 18px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-status {
+  line-height: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  color: rgb(120, 255, 120);
+}
+
+/* 内缩到绒布边缘以内（--room-pad = 桌沿 + 间距），桌沿加厚时自动跟着走 */
+.player-wrapper.player-p0 { left: var(--room-pad); top: var(--room-pad); }
+.player-wrapper.player-p1 { left: var(--room-pad); top: 50%; margin-top: -50px; }
+.player-wrapper.player-p2 { left: var(--room-pad); bottom: var(--room-pad); }
+.player-wrapper.player-p4 { right: var(--room-pad); bottom: var(--room-pad); }
+.player-wrapper.player-p5 { right: var(--room-pad); top: 50%; margin-top: -50px; }
+.player-wrapper.player-p6 { right: var(--room-pad); top: var(--room-pad); }
+.player-wrapper.player-p7 { right: 50%; margin-right: -50px; top: var(--room-pad); }
+.player-wrapper.player-p3 { bottom: var(--room-pad); left: 50%; margin-left: -50px; }
+
+/* 当前行动玩家高亮 */
+.player-wrapper.active-turn .player-name {
+  color: var(--gold);
+}
+
+/* ---------------- 弹层内文本 ---------------- */
+.msg-title { font-size: 20px; margin-bottom: 5px; }
+.msg-success { color: #29ba9d; }
+.msg-fail { color: #c80000; }
+
+.msg-box {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.3);
+  word-spacing: -5px;
+}
+.msg-select { outline: none; }
+.input.msg-input { height: 22px; }
+.msg-btn {
+  height: 22px;
+  font-size: 10px;
+  line-height: 15px;
+  border-radius: 0 !important;
+}
+.msg-list {
+  min-height: 200px;
+  max-height: 400px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  color: #fff;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.msg-item { padding: 5px 0; max-width: 220px; word-break: break-all; }
+.msg-item-time { padding-right: 10px; }
+
+/* 滚动条 */
+.scroll-bar::-webkit-scrollbar { width: 10px; height: 1px; }
+.scroll-bar::-webkit-scrollbar-thumb {
+  border-radius: 10px;
+  -webkit-box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.1);
+}
+.scroll-bar::-webkit-scrollbar-track {
+  -webkit-box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.2);
+  border-radius: 10px;
+}
+
+/* ---------------- 战绩弹层 ---------------- */
+.history-box { padding: 12px 16px; overflow-y: auto; height: 100%; box-sizing: border-box; }
+.history-table { width: 100%; border-collapse: collapse; font-size: 13px; color: #333; }
+.history-table th, .history-table td { padding: 6px 8px; border-bottom: 1px solid #e5e5e5; text-align: center; }
+.history-table th { background: #f7f7f7; }
+.history-row { cursor: pointer; transition: background .12s ease; }
+.history-row:hover { background: #f0f7ff; }
+.history-empty { color: #999; padding: 24px 0; }
+.history-pager { padding: 10px 0 4px; color: #666; font-size: 13px; text-align: center; }
+.history-link { color: #1e9fff; text-decoration: none; }
+.history-link:hover { text-decoration: underline; }
+.his-win { color: #16a05d; font-weight: bold; }
+.his-lose { color: #d84; }
+.his-escape { color: #999; }
+.history-meta { color: #666; font-size: 12px; margin: 0 0 8px; }
+
+/* ---------------- 座位阵营编号 A1-A4 / B1-B4（半透明内嵌） ---------------- */
+.seat-badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50px;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  pointer-events: none;
+  color: rgba(255, 255, 255, 0.38);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.seat-badge-a { color: rgba(140, 185, 255, 0.45); }
+.seat-badge-b { color: rgba(255, 160, 150, 0.45); }
+
+/* 有人入座时同样内嵌、稍微收敛 */
+.position-image.has ~ .seat-badge,
+.position-image.has2 ~ .seat-badge {
+  font-size: 12px;
+  top: auto;
+  bottom: 2px;
+  left: 2px;
+  width: auto;
+  height: auto;
+  letter-spacing: 0;
+}
+
+/* 房间头像上的编号：同样半透明内嵌 */
+.player-photo { position: relative; }
+.seat-badge-avatar {
+  width: 100%;
+  height: 64px;
+  top: 0;
+  left: 0;
+  font-size: 15px;
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+}

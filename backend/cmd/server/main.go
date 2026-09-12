@@ -1,0 +1,116 @@
+// talkcards 沟通牌 Go 后端（单二进制，前端静态资源已嵌入）。
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	flag "github.com/spf13/pflag"
+
+	"github.com/labstack/echo/v4"
+
+	"talkcards/backend/internal/hub"
+	"talkcards/backend/internal/logging"
+	"talkcards/backend/internal/store"
+	"talkcards/backend/internal/wssrv"
+	"talkcards/backend/web"
+)
+
+var version = "dev"
+
+// envOr 环境变量缺省值兜底：CLI 显式参数 > 环境变量 > 内置默认
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func main() {
+	var (
+		port             = flag.StringP("port", "p", envOr("PORT", "8000"), "服务监听端口（默认取 PORT 环境变量，缺省 8000）")
+		host             = flag.String("host", "", "服务监听地址（默认所有接口）")
+		reconnectTimeout = flag.Int("reconnect-timeout", 600, "游戏中断线后的重连等待时限（秒），0 表示无限等待")
+		dbPath           = flag.String("db", "./talkcards.db", "战绩 SQLite 数据库路径")
+		logLevel         = flag.String("log-level", "info", "日志级别：debug|info|warn|error")
+		logFormat        = flag.String("log-format", "text", "日志格式：text|json")
+		staticDir        = flag.String("static-dir", "", "前端静态资源目录（磁盘加载，替代嵌入资源；缺省用嵌入的 web/static）")
+		showVersion      = flag.BoolP("version", "v", false, "打印版本并退出")
+	)
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("talkcards %s\n", version)
+		return
+	}
+
+	logger, err := logging.New(logging.Options{Level: *logLevel, Format: *logFormat})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "日志初始化失败: %v\n", err)
+		os.Exit(2)
+	}
+	slog.SetDefault(logger)
+
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+
+	// 战绩持久化（恒开；登录仅以用户名为唯一身份，无需落库）
+	st, err := store.Open(*dbPath)
+	if err != nil {
+		logger.Error("打开数据库失败", "path", *dbPath, "err", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	wsServer := wssrv.New(logger)
+	gameServer := hub.New(st, time.Duration(*reconnectTimeout)*time.Second, logger)
+	gameServer.Register(wsServer)
+	defer gameServer.Flush() // 等待异步落库排空（LIFO：先于 st.Close 执行）
+	e.GET("/ws", echo.WrapHandler(wsServer))
+
+	var staticFS fs.FS
+	if *staticDir != "" {
+		// 磁盘静态资源目录（开发用，免重新构建二进制即可改前端）
+		staticFS = os.DirFS(*staticDir)
+		if _, err := fs.Stat(staticFS, "index.html"); err != nil {
+			logger.Error("静态资源目录缺少 index.html", "dir", *staticDir)
+			os.Exit(1)
+		}
+	} else if f, err := fs.Sub(web.Assets, "static"); err != nil {
+		logger.Error("嵌入静态资源解包失败", "err", err)
+		os.Exit(1)
+	} else {
+		staticFS = f
+	}
+	e.StaticFS("/", staticFS)
+
+	// 收到中断信号后优雅关闭：停收新连接、等待在途请求，随后 main 正常返回走 defer
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		logger.Info("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := e.Shutdown(shutdownCtx); err != nil {
+			logger.Error("关闭服务失败", "err", err)
+		}
+	}()
+
+	addr := net.JoinHostPort(*host, *port)
+	logger.Info("服务启动", "version", version, "addr", addr, "db", *dbPath)
+	if err := e.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("服务异常退出", "err", err)
+		os.Exit(1)
+	}
+}

@@ -1,0 +1,24 @@
+# e2e 验收脚本依赖（仓库根 npm install）
+node_modules/
+*.log
+npm-debug.log*
+
+# Go 构建产物
+/target/
+/backend/dist/
+*.test
+*.out
+go.work
+go.work.sum
+
+# SQLite 运行时数据（dev 运行默认在 CWD 生成 talkcards.db）
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/
+*.swp

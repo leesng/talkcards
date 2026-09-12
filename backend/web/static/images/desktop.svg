@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+  <!--
+    牌桌「绒布」纹理。只负责绒布本身：底色渐变 + 绒毛噪点 + 暗角。
+
+    木沿、圆角、投影、绒布凹陷阴影全部由 CSS 画（style.css 的 .table-rim / .table-felt），
+    几何只在 CSS 的 :root 变量块里定义一次。
+    之前的版本把 20px 桌沿画在 SVG 里，导致「桌沿厚度/头像内缩」必须在 SVG 和 CSS
+    两处各写一遍常量，改一处就会错位；现在不再有这个问题。
+
+    本文件被拉伸到 .table-felt 的尺寸：无 viewBox + width/height=100%，
+    所以用户单位 = CSS 像素，噪点永远 200px 一格，不随屏幕缩放变形。
+    CSS 用法：background: url('/images/desktop.svg') center/100% 100% no-repeat;
+  -->
+  <defs>
+    <!-- 绒布底色：中心略亮、边缘压暗（与 :root 的 felt / felt-deep 变量对齐） -->
+    <radialGradient id="tableFelt" cx="50%" cy="46%" r="72%">
+      <stop offset="0%" stop-color="#1D6A4F" />   <!-- 中心，= felt 变量 -->
+      <stop offset="60%" stop-color="#175C42" />  <!-- 中间过渡 -->
+      <stop offset="100%" stop-color="#0E3A26" /> <!-- 边缘，= felt-deep 变量 -->
+    </radialGradient>
+
+    <!-- 暗角：把注意力收在中间的出牌区 -->
+    <radialGradient id="feltVignette" cx="50%" cy="46%" r="78%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0" />
+      <stop offset="70%" stop-color="#000000" stop-opacity="0" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.32" />
+    </radialGradient>
+
+    <!-- 绒毛：输出"均值 0.5 的灰噪声"，配合 mix-blend-mode:soft-light，
+         比 0.5 亮的地方提亮、比 0.5 暗的地方压暗 —— 是真正的布面绒毛。
+         （旧版输出纯白 + 变化 alpha，soft-light 只能单方向提亮，
+         暗处相对增幅反而最大，看上去像闪点/发霉。）
+         滤镜只在 200x200 的小色块上跑一次，再靠 <pattern> 平铺，避免整屏开销；
+         stitchTiles="stitch" 保证平铺无缝。 -->
+    <filter id="feltGrain" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="4" seed="11" stitchTiles="stitch" result="noise" />
+      <feColorMatrix in="noise" type="matrix" values="0.45 0.225 0.1125 0 0.10625
+                                                      0.45 0.225 0.1125 0 0.10625
+                                                      0.45 0.225 0.1125 0 0.10625
+                                                      0    0     0      0 1" />
+    </filter>
+    <pattern id="feltNoise" width="200" height="200" patternUnits="userSpaceOnUse">
+      <rect width="200" height="200" filter="url(#feltGrain)" />
+    </pattern>
+  </defs>
+
+  <!-- 1. 绒布底色 -->
+  <rect width="100%" height="100%" fill="url(#tableFelt)" />
+  <!-- 2. 绒毛（opacity 控制强度，同时给不支持 mix-blend-mode 的渲染器留一个温和的降级） -->
+  <rect width="100%" height="100%" fill="url(#feltNoise)" opacity="0.42" style="mix-blend-mode:soft-light" />
+  <!-- 3. 暗角 -->
+  <rect width="100%" height="100%" fill="url(#feltVignette)" />
+</svg>

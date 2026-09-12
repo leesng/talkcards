@@ -1,0 +1,14 @@
+{
+  "name": "talkcards",
+  "version": "1.0.0",
+  "description": "沟通牌多人在线对战（e2e 验收脚本依赖）",
+  "private": true,
+  "scripts": {
+    "e2e": "node backend/scripts/e2e-bot.js",
+    "e2e:audit": "node backend/scripts/e2e-audit.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "ws": "^6.1.4"
+  }
+}
