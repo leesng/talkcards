@@ -4,6 +4,7 @@ package hub
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"talkcards/backend/internal/wssrv"
@@ -71,3 +72,6 @@ func (h *Hub) nextID() int64 {
 }
 
 func now() string { return time.Now().Format("15:04:05") }
+
+// itoa 系统消息里的数字拼装（避免到处 strconv.Itoa）
+func itoa(n int) string { return strconv.Itoa(n) }

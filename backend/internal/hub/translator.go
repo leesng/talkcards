@@ -57,6 +57,7 @@ func leadFrame(p int) ctxPlayChange {
 		TmpFeng: 0,
 		PosID:   p,
 		Timeout: playTiming,
+		Clear:   true, // 领出状态：桌面无牌可压，客户端应清空出牌区与"要压的牌型"
 	}
 }
 
@@ -99,6 +100,7 @@ func replayFrame(snap *table.PlaySnapshot) ctxPlayChange {
 		PosID:   snap.Next,
 		Timeout: playTiming,
 		IsPass:  snap.IsPass,
+		Replay:  true,
 	}
 }
 

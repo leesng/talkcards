@@ -277,6 +277,12 @@ async function main() {
   });
 
   for (const b of bots) b.emit('PREPARE');
+  // 主持模式：先等全员 PREPARE_SUCCESS，再由主持人（首坐者，权限不转移）开牌，
+  // 避免开牌请求先于别人的 PREPARE 到达服务器被拒
+  await Promise.all(bots.map((b) => b.wait('PREPARE_SUCCESS', 10000)));
+  const host = bots.find((b) => b.hostPos === b.posId);
+  check(!!host, '找到主持人');
+  if (host) host.emit('HOST_START_GAME');
   await Promise.race(bots.map((b) => b.wait('GAME_START', 15000)));
   await finished;
   clearTimeout(hardStop);

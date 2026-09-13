@@ -6,7 +6,7 @@ Multiplayer Chinese card game (沟通牌, "running quick" style). Go backend (`b
 
 ### Go (backend/)
 
-- `(cd backend && go run ./cmd/server)` — dev run, default port **8000** (override with `--port/-p` flag or `PORT` env). CLI flags via spf13/pflag: `--port/-p`, `--host`, `--reconnect-timeout`（秒，0=无限）, `--db`（战绩库路径，默认 `./talkcards.db`）, `--log-level`（debug|info|warn|error，默认 info）, `--log-format`（text|json，默认 text）, `--version/-v`. 战绩持久化恒开，无开关；SIGINT/SIGTERM 走 `e.Shutdown` 优雅退出并排空异步落库队列（不再 `os.Exit` 跳过 defer）。
+- `(cd backend && go run ./cmd/server)` — dev run, default port **8000** (override with `--port/-p` flag or `PORT` env). CLI flags via spf13/pflag: `--port/-p`, `--host`, `--reconnect-timeout`（秒，0=无限）, `--db`（战绩库路径，默认 `./talkcards.db`）, `--log-level`（debug|info|warn|error，默认 info）, `--log-format`（text|json，默认 text）, `--bot-delay-min-ms`/`--bot-delay-max-ms`（机器人随机行动延迟区间，默认 1000/3000 毫秒）, `--version/-v`. 战绩持久化恒开，无开关；SIGINT/SIGTERM 走 `e.Shutdown` 优雅退出并排空异步落库队列（不再 `os.Exit` 跳过 defer）。
 - 日志系统为 `log/slog`（`internal/logging` 初始化，输出 stderr）：hub/wssrv 经构造函数注入 `*slog.Logger`，业务字段用结构化键（user/desk/pos/event/err）；`slog.SetDefault` 已在 main 中设置。
 - `(cd backend && go vet ./... && go test ./...)` — unit tests (wssrv 通信层、card validator、game logic).
 - `./build.sh` (repo root) — cross-compiles `target/talkcards-linux-{amd64,arm64}` single binaries (git-ignored). `./build.sh test` builds the native-arch binary, boots it on a temp port (`TEST_PORT`, default 8765), and runs the full-game audit `e2e-audit.js` against it.
@@ -16,6 +16,8 @@ Multiplayer Chinese card game (沟通牌, "running quick" style). Go backend (`b
 - `node backend/scripts/e2e-bot.js <url>`（默认 http://127.0.0.1:8000，需先在仓库根 `npm install`——devDependencies 提供 `ws` 包）— 5 大场景：大厅（用户名登录校验）、8 机器人完整牌局、游戏中掉线（保留→超时/主动终止）、断线重连续局、历史战绩查询。多轮连跑很重要（状态泄漏只会在跨轮时显现）；每轮用 `timeout` 限界防止挂死。
   - URL 亦可用 `E2E_URL` 环境变量传（`node -e`/require 复用 WsClient/Bot 时 argv 不属于脚本）。
   - 场景 B 兼容任意 `--reconnect-timeout`：短超时服务器走"超时判逃"，长超时服务器 6s 后由他人主动退出触发终止（manual 路径）。
+  - 场景 F：人机模式（单人开牌、空位确认后填充服务器机器人打完整局并落库）。验收服务器以 `--bot-delay-min-ms 30 --bot-delay-max-ms 100` 启动（默认 1-3 秒会让整局在 180s 限时内打不完）；手动验收完整延迟请用默认参数自起服务器。
+- 人机模式（服务器侧机器人，`internal/bot` 策略：首出 ≤8 小牌（单/双/三不限型）按牌面升序最优先、小牌清完后按 孤张单→对→三→炸弹 组序、不拆组、炸弹先比张数再比牌面；跟牌走 `FollowSmart` 智能策略：①队友的牌除非是 ≤8 的单/双/三一律不吃，只吃对手的牌；②桌面无分且只剩炸弹能压时 ≤4×8 炸弹 30% 放行、其余 4/5 张炸弹 5%、超 5 张或王炸不出；③桌面有分 ≥50 必压，<50 时 4 张照出、5 张 50%、6 张及以上含王炸 20%，随机源可注入便于测试）：主持位 `HOST_START_GAME {fillBots:true}` 填充空位为机器人（不传 fillBots 且有空位 → MESSAGE 提示拒绝）；机器人无真实连接，`hub.scheduleBotIfTurn` 每桌单定时器、随机延迟后持锁重验轮次再走与真人共用的 `applyCallScore`/`applyPlayResult`（origin=nil 不回 SUCCESS/ERROR）；终局/终止时 `clearBotSeats` 清座广播。前端以 `isBot` 标记展示。回归测试 `internal/hub/bots_test.go`：8 机器人自打整局 + 单真人 e2e 策略整局（注意：fakeConn 帧经 pump 异步投递，出牌后必须轮询等待 SUCCESS/ERROR 帧，同步读会误判被拒→重出同一张→越序毒化）。
 - `node backend/scripts/e2e-audit.js <url>` — 完整对局审计：8 机器人按「有牌权：有单（孤张）出单，无单出对，无对出三，最后才是炸弹」策略出牌——候选按 孤张单→对→三→炸弹 分组、组内牌值升序，同值张数整体归组不拆（跟牌宁可过牌不拆对/三）；炸弹候选按掷骰放行（桌上有分 90%、无分 10%，未命中跳过），手里只剩炸弹时不掷骰直接出最小炸弹。逐手输出台账（含收分），内置独立重放校验器逐帧断言轮转/压牌合法性/牌数守恒/收分一致。`AUDIT_VERBOSE=1` 输出每次被拒尝试与跳过的炸弹，`AUDIT_FRAMES=1` 输出原始帧 JSON。发牌与掷骰均随机（无 seed，排查靠台账/原始帧）；`./build.sh test` 默认连跑 3 局（`AUDIT_ROUNDS` 覆盖）。
 
 ## Architecture
@@ -35,7 +37,7 @@ Go 版（`backend/`，2026-09 已完成现代化重构 P0–P3，计划见 `docs
 
 - 通信层 `js/mySocket.js`：socket.io 风格 on/emit 迷你客户端（断线指数退避重连 + 自动重登录），信封协议与 wssrv 对应。
 - `index.html` 内联 Vue 应用，所有 `.on/.emit` 与旧 Socket.IO 事件契约完全一致。
-- `js/parser.js` 复制了后端压牌校验（internal/card）的辅助函数供客户端用——改压牌校验时同步检查。
+- `js/parser.js` 复制了后端压牌校验（internal/card）的辅助函数供客户端用——改压牌校验时同步检查。出牌提示（`parseShape`/`shapeBeats`/`hintCandidates`/`findHintCards`）同样复刻了 `internal/card.Shape.Beats` 与 `Classify`，规则变更必须两边同步；提示按「孤张单→对→三→炸弹」整组取牌、不拆对/三（与 e2e-audit 机器人同策略），只负责选中手牌，不代替出牌。
 
 ## Gotchas
 

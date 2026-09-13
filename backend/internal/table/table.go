@@ -5,6 +5,7 @@ package table
 
 import (
 	"sort"
+	"strconv"
 	"time"
 
 	"talkcards/backend/internal/card"
@@ -23,6 +24,7 @@ type Seat struct {
 	PosID    int    `json:"posId"`
 	State    int    `json:"state"` // 0没人 1未准备 2已准备
 	UserName string `json:"userName"`
+	IsBot    bool   `json:"isBot"` // 人机模式填充的机器人座位（主持人开牌时填充，终局清理）
 }
 
 // Hold 游戏中断线玩家的保留记录。
@@ -55,8 +57,14 @@ type Desk struct {
 	Game      *game.Game        `json:"-"` // 本桌对局；nil=未开局
 	StartedAt time.Time         `json:"-"` // 本局开始时间（落库用）
 	Players   [SeatCount]string `json:"-"` // 开局时玩家快照（落库用，不受中途座位变动影响）
-	LastPlay  *PlaySnapshot     `json:"-"` // 最近一次出牌快照（断线重连重放）
+	LastPlay  *PlaySnapshot     `json:"-"` // 最近一次动作快照（出牌或过牌，断线重连重放）
+	// LastValidPlay 最近一次"有效出牌"（非过牌）快照：过牌不覆盖它。
+	// 上一手是过牌时，重连者只靠 LastPlay 看不到桌面上还有哪手牌要压，
+	// 故重连时先补发本帧再补发 LastPlay。
+	LastValidPlay *PlaySnapshot `json:"-"`
 	Holds     []Hold            `json:"-"` // 断线保留记录（按用户名）
+
+	HostPosID int `json:"-"` // 主持人座位号（第一个入座者）；主持人离桌时自动顺延给下一个有人的座位
 }
 
 // Lobby 大厅
@@ -72,7 +80,7 @@ func New() *Lobby {
 		for j := range pos {
 			pos[j] = Seat{PosID: j}
 		}
-		l.Desks[i] = &Desk{DeskID: i + 1, Positions: pos}
+		l.Desks[i] = &Desk{DeskID: i + 1, Positions: pos, HostPosID: -1}
 	}
 	return l
 }
@@ -157,14 +165,80 @@ func (d *Desk) UpdateOtherPos(posID, state int) {
 // SetState 更新房间状态
 func (d *Desk) SetState(state int) { d.State = state }
 
-// AllPrepared 全员已准备
+// AllPrepared 所有已入座玩家均已准备（空座不阻塞；人未齐时可由主持人填充机器人开局）
 func (d *Desk) AllPrepared() bool {
 	for i := range d.Positions {
-		if d.Positions[i].State != 2 {
+		if d.Positions[i].State != 0 && d.Positions[i].State != 2 {
 			return false
 		}
 	}
 	return true
+}
+
+// EmptySeats 空座位号列表（升序），主持人开牌时据此判断是否需要填充机器人
+func (d *Desk) EmptySeats() []int {
+	var empty []int
+	for i := range d.Positions {
+		if d.Positions[i].State == 0 {
+			empty = append(empty, d.Positions[i].PosID)
+		}
+	}
+	return empty
+}
+
+// FillBots 把全部空位填充为机器人（视为已准备），返回填充的座位号列表（升序）。
+// 机器人名字按填充顺序编号，仅对局期间存在，终局由 ClearBots 清理。
+func (d *Desk) FillBots() []int {
+	var filled []int
+	for i := range d.Positions {
+		if d.Positions[i].State == 0 {
+			d.Positions[i].State = 2
+			d.Positions[i].UserName = "机器人#" + strconv.Itoa(d.DeskID) + "-" + strconv.Itoa(d.Positions[i].PosID)
+			d.Positions[i].IsBot = true
+			filled = append(filled, d.Positions[i].PosID)
+		}
+	}
+	return filled
+}
+
+// ClearBots 清理全部机器人座位（终局调用）：复位为空座，返回被清理的座位号列表
+func (d *Desk) ClearBots() []int {
+	var cleared []int
+	for i := range d.Positions {
+		if d.Positions[i].IsBot {
+			d.Positions[i] = Seat{PosID: d.Positions[i].PosID}
+			cleared = append(cleared, d.Positions[i].PosID)
+		}
+	}
+	return cleared
+}
+
+// AssignHost 入座时调用：本桌尚无主持人（空桌首坐）则授予 posID 主持权，返回是否授予。
+// 断线（座位保留）不影响主持权；仅当主持人真正离桌（座位释放）时经 TransferHostFrom 顺延。
+func (d *Desk) AssignHost(posID int) bool {
+	if d.HostPosID == -1 {
+		d.HostPosID = posID
+		return true
+	}
+	return false
+}
+
+// TransferHostFrom 主持人离桌（座位释放）时调用：若 posID 正是主持人，
+// 从其下一座起顺时针找第一个有人的座位接任；全桌无人则复位为 -1。
+// 返回新主持人座位号（-1=复位）及是否发生变化。非主持人离桌不产生变化。
+func (d *Desk) TransferHostFrom(posID int) (int, bool) {
+	if d.HostPosID != posID {
+		return d.HostPosID, false
+	}
+	for i := 1; i <= SeatCount; i++ {
+		p := (posID + i) % SeatCount
+		if d.Positions[p].State != 0 && !d.Positions[p].IsBot { // 机器人不接任主持人
+			d.HostPosID = p
+			return p, true
+		}
+	}
+	d.HostPosID = -1
+	return -1, true
 }
 
 // GameInProgress 对局进行中（叫分/出牌均算）
@@ -188,6 +262,7 @@ func (d *Desk) ResetGame() {
 	}
 	d.StartedAt = time.Time{}
 	d.LastPlay = nil
+	d.LastValidPlay = nil
 }
 
 // Hold 查某用户的保留记录

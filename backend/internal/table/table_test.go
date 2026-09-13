@@ -43,14 +43,73 @@ func TestQuickJoinPicksFullestDesk(t *testing.T) {
 
 func TestPrepareLifecycle(t *testing.T) {
 	d := New().Desk(1)
-	for i := 0; i < SeatCount; i++ {
+	// 空桌：无人入座也视为"已入座者全准备"（人未齐由主持人决定是否填充机器人开局）
+	if !d.AllPrepared() {
+		t.Fatalf("空桌应视为已入座者全准备")
+	}
+	// 有人入座但未准备 → 不满足
+	d.UpdatePos(0, 1, ptr("u0"))
+	if d.AllPrepared() {
+		t.Fatalf("有人未准备不应通过")
+	}
+	// 已入座者全准备即可（空座位不阻塞）
+	d.UpdatePos(0, 2, nil)
+	if !d.AllPrepared() {
+		t.Fatalf("已入座者全准备应通过（空座不阻塞）")
+	}
+	for i := 1; i < SeatCount; i++ {
+		d.UpdatePos(i, 1, ptr("u"))
 		if d.AllPrepared() {
-			t.Fatalf("尚有人未入座即全员准备")
+			t.Fatalf("第 %d 座已入座未准备，不应通过", i)
 		}
-		d.UpdatePos(i, 2, ptr("u"))
+		d.UpdatePos(i, 2, nil)
 	}
 	if !d.AllPrepared() {
 		t.Fatalf("全部置 2 后应全员准备")
+	}
+}
+
+func TestFillBotsAndClearBots(t *testing.T) {
+	d := New().Desk(1)
+	d.UpdatePos(3, 2, ptr("host")) // 真人已准备
+	if got := len(d.EmptySeats()); got != 7 {
+		t.Fatalf("应剩 7 个空位，实际 %d", got)
+	}
+	filled := d.FillBots()
+	if len(filled) != 7 {
+		t.Fatalf("应填充 7 个机器人，实际 %d", len(filled))
+	}
+	for _, p := range filled {
+		s := d.Seat(p)
+		if !s.IsBot || s.State != 2 || s.UserName == "" {
+			t.Fatalf("座位 %d 应为已准备机器人", p)
+		}
+	}
+	if s := d.Seat(3); s.IsBot {
+		t.Fatalf("真人座位不应被标记为机器人")
+	}
+	if len(d.EmptySeats()) != 0 || !d.AllPrepared() {
+		t.Fatalf("填充后应满员且全准备")
+	}
+	// 机器人不接任主持权
+	d.HostPosID = 3
+	if p, changed := d.TransferHostFrom(3); !changed || p == filled[0] && d.Seat(p).IsBot {
+		// TransferHostFrom 会跳过机器人座；此处仅验证不落在机器人座
+		for i := 0; i < SeatCount; i++ {
+			if s := d.Seat(i); s.IsBot && i == d.HostPosID {
+				t.Fatalf("主持人不应顺延给机器人，实际给了座位 %d", i)
+			}
+		}
+	}
+	cleared := d.ClearBots()
+	if len(cleared) != 7 {
+		t.Fatalf("应清理 7 个机器人座位，实际 %d", len(cleared))
+	}
+	if s := d.Seat(cleared[0]); s.State != 0 || s.UserName != "" || s.IsBot {
+		t.Fatalf("清理后座位应复位为空座")
+	}
+	if s := d.Seat(3); s.State != 2 || s.IsBot {
+		t.Fatalf("真人座位不应受清理影响")
 	}
 }
 

@@ -79,6 +79,7 @@ class Bot {
     this.name = name;
     this.posId = -1;
     this.deskId = -1;
+    this.hostPos = -1; // 主持模式：当前主持人座位号（首坐者，权限不转移；常监听 HOST_CHANGE 维护）
     this.hand = [];
     this.gameOver = null;
     this.forceExit = null;
@@ -89,6 +90,10 @@ class Bot {
     this.socket = connect();
     this.socket.on('GAME_OVER', (d) => { this.gameOver = d; });
     this.socket.on('FORCE_EXIT_EV', (d) => { this.forceExit = d; });
+    // 常监听（非动态 on/off）：主持权授予/复位都据此更新，不吃 pending
+    this.socket.on('HOST_CHANGE', (d) => {
+      if (d && typeof d.posId === 'number') this.hostPos = d.posId;
+    });
   }
   emit(ev, data) { this.socket.emit(ev, data); }
   // wait 先消费暂存事件（同一 tick 背靠背多帧时，监听器可能晚于帧注册），
@@ -118,6 +123,8 @@ class Bot {
       `${this.name} SITDOWN_SUCCESS`);
     this.posId = posId;
     this.deskId = deskId;
+    // 首坐者会随后收到 HOST_CHANGE 常监听帧更新 hostPos；后坐者直接从回帧拿当前主持位
+    if (typeof d.hostPosId === 'number' && d.hostPosId !== -1) this.hostPos = d.hostPosId;
   }
   async prepare() {
     this.emit('PREPARE');
@@ -132,6 +139,7 @@ class Bot {
     const rec = await this.wait('RECONNECT', 8000);
     check(rec.deskId === this.deskId && rec.posId === this.posId && rec.posInfos.length === 8,
       `${this.name} RECONNECT 坐回桌${rec.deskId}座${rec.posId}`);
+    if (typeof rec.hostPosId === 'number') this.hostPos = rec.hostPosId;
     return rec;
   }
   takeCards(cards, replay = false) {
@@ -192,6 +200,15 @@ async function spawnBots(prefix) {
     bots.push(b);
   }
   return bots;
+}
+
+// 主持模式：全员 PREPARE 后服务器不再自动开局，由主持人（首坐者，权限不转移）发 HOST_START_GAME。
+// 须先等全员 PREPARE_SUCCESS 再开牌：各 bot 的 PREPARE 与主持人的 HOST_START_GAME 跨连接并发，
+// 服务器可能先处理到开牌请求（此时还有人未准备）而拒绝（曾致场景 A/D 偶发超时）。
+async function hostStart(bots) {
+  const host = bots.find((b) => b.hostPos === b.posId);
+  if (!host) throw new Error('未找到主持人（HOST_CHANGE 跟踪缺失）');
+  host.emit('HOST_START_GAME');
 }
 
 // attachDriver 挂载完整对局驱动（叫分 + 出牌 + 终局）。
@@ -259,6 +276,8 @@ async function scenarioFullGame() {
   const drv = attachDriver(bots, budget);
 
   for (const b of bots) b.emit('PREPARE');
+  await Promise.all(bots.map((b) => b.wait('PREPARE_SUCCESS', 10000)));
+  await hostStart(bots); // 主持模式：全员准备好后由主持人开牌
   const starter = await Promise.race(bots.map((b) => b.wait('GAME_START', 15000)));
   check(starter && Array.isArray(starter.cards) && starter.cards.length === 8, 'GAME_START 8 家手牌齐全');
   const total = starter.cards.reduce((s, g) => s + g.cards.length, 0);
@@ -290,6 +309,8 @@ async function scenarioEscape() {
     });
   });
   bots.forEach((b) => b.emit('PREPARE'));
+  await Promise.all(bots.map((b) => b.wait('PREPARE_SUCCESS', 10000)));
+  await hostStart(bots);
   await Promise.race(bots.map((b) => b.wait('CTX_PLAY_CHANGE', 20000)));
 
   bots[3].socket.close(); // 3 号掉线
@@ -368,6 +389,8 @@ async function scenarioReconnect() {
   const drv = attachDriver(bots, budget);
 
   for (const b of bots) b.emit('PREPARE');
+  await Promise.all(bots.map((b) => b.wait('PREPARE_SUCCESS', 10000)));
+  await hostStart(bots);
   // 等全员都拿到手牌（只 race 一个会在部分 bot 尚未处理 GAME_START 时就继续）
   await Promise.all(bots.map((b) => b.wait('GAME_START', 15000)));
   // 等首手出牌后再掉线（保证处于出牌阶段）
@@ -447,6 +470,45 @@ async function scenarioHistory() {
   b3.socket.close();
 }
 
+// 场景 F：人机模式（主持人开牌时空位填充机器人，单人练习一整局）
+async function scenarioBotFill() {
+  console.log('场景 F：人机模式（单人 + 7 机器人）');
+  const human = new Bot('F0');
+  await human.login();
+  await human.sit(DESK, 3); // 首坐者即主持人
+  human.emit('PREPARE');
+  await human.wait('PREPARE_SUCCESS', 10000);
+
+  // 有空位但不确认填充：服务器拒绝并提示，不开局
+  human.emit('HOST_START_GAME');
+  const deny = await human.wait('MESSAGE');
+  check(deny && /空位/.test(deny.msg), `不确认填充被拒（${deny.msg}）`);
+
+  // 确认填充：7 个机器人入座（POS_STATUS_CHANGE 带 isBot）后开局
+  const botSeats = [];
+  human.socket.on('POS_STATUS_CHANGE', (d) => { if (d.isBot) botSeats.push(d); });
+  const budget = moveBudget(12000);
+  const drv = attachDriver([human], budget); // 机器人由服务器驱动，只需驱动真人座位
+  human.emit('HOST_START_GAME', { fillBots: true });
+  const starter = await human.wait('GAME_START', 15000);
+  check(starter && starter.cards.length === 8, '人机局 GAME_START 8 家手牌齐全');
+  await sleep(500);
+  check(botSeats.length === 7 && botSeats.every((d) => d.state === 2 && d.userName),
+    `7 个机器人入座（实际 ${botSeats.length}）`);
+
+  await drv.finished;
+  if (drv.failure()) throw drv.failure();
+  check(human.gameOver && human.gameOver.winner.length === 4, '人机局正常 GAME_OVER');
+
+  // 终局机器人座位清理：等待收尾 POS_STATUS_CHANGE(state=0)
+  await sleep(500);
+  human.emit('HISTORY_LIST', { page: 1 });
+  const hlist = await human.wait('HISTORY_LIST');
+  check(hlist.total >= 1 && hlist.list[0].playerNum === 8, `人机局落库 8 名玩家（total=${hlist.total}）`);
+
+  human.socket.close();
+}
+
 if (require.main === module) (async () => {
   try {
     await scenarioLobby();
@@ -454,6 +516,7 @@ if (require.main === module) (async () => {
     await scenarioEscape();
     await scenarioReconnect();
     await scenarioHistory();
+    await scenarioBotFill();
     console.log(failed ? '\nE2E: 存在失败项' : '\nE2E: 全部通过');
     // ws.close() 的关闭帧为异步发送；稍等一拍再退出，确保服务器收到
     // 断开并清理座位，避免殃及下一轮验收

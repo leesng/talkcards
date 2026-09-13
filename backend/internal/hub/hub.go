@@ -43,9 +43,29 @@ type Hub struct {
 	st            *store.Store           // 战绩历史持久化
 	reconnectWait time.Duration          // 游戏中断线后的重连等待时限；<=0 表示无限等待
 	timers        map[string]*time.Timer // 断线保留倒计时（按用户名；回调须持 mu）
+	botTimers     map[int]*time.Timer    // 机器人行动定时器（按桌；回调须持 mu）
+	botDelayMin   time.Duration          // 机器人行动随机延迟下限（默认 1s）
+	botDelayMax   time.Duration          // 机器人行动随机延迟上限（默认 3s）；测试可调小加速
 	saves         chan store.GameRecord  // 异步落库队列（见 persist.go）
 	saveWG        sync.WaitGroup         // 在途落库计数，供 Flush 排空
 	logger        *slog.Logger
+}
+
+// 机器人默认行动延迟区间：真人视角下机器人"思考" 1-3 秒随机再出牌
+const (
+	botDelayMinDefault = 1 * time.Second
+	botDelayMaxDefault = 3 * time.Second
+)
+
+// SetBotDelay 设置机器人行动随机延迟区间（供 CLI 注入；min>max 时交换，<=0 取默认）
+func (h *Hub) SetBotDelay(minv, maxv time.Duration) {
+	if minv <= 0 || maxv <= 0 {
+		minv, maxv = botDelayMinDefault, botDelayMaxDefault
+	}
+	if minv > maxv {
+		minv, maxv = maxv, minv
+	}
+	h.botDelayMin, h.botDelayMax = minv, maxv
 }
 
 // New 创建大厅（20 桌 × 8 座）；reconnectWait <= 0 表示无限等待重连。
@@ -59,6 +79,9 @@ func New(st *store.Store, reconnectWait time.Duration, logger *slog.Logger) *Hub
 		st:            st,
 		reconnectWait: reconnectWait,
 		timers:        make(map[string]*time.Timer),
+		botTimers:     make(map[int]*time.Timer),
+		botDelayMin:   botDelayMinDefault,
+		botDelayMax:   botDelayMaxDefault,
 		saves:         make(chan store.GameRecord, saveQueue),
 		logger:        logger,
 	}
@@ -79,6 +102,7 @@ func (h *Hub) Register(srv *wssrv.Server) {
 	noData(srv, EvUnsitdown, h.onUnsitdown)
 	noData(srv, EvPrepare, h.onPrepare)
 	noData(srv, EvCancelPrepare, h.onCancelPrepare)
+	on(srv, EvHostStartGame, h.logger, h.onHostStartGame) // 载荷可缺省（fillBots）
 	srv.OnDisconnect(h.onDisconnect)
 }
 
@@ -252,7 +276,11 @@ func (h *Hub) onSitdown(s wssrv.Conn, data sitdownReq) {
 	c.deskID = data.DeskID
 	c.posID = data.PosID
 
-	h.emit(c, EvSitdownSuccess, sitdownSuccess{DeskID: data.DeskID, PosID: data.PosID, PosInfo: d.Positions})
+	h.emit(c, EvSitdownSuccess, sitdownSuccess{DeskID: data.DeskID, PosID: data.PosID, PosInfo: d.Positions, HostPosID: d.HostPosID})
+	// 空桌首坐获得主持权
+	if d.AssignHost(data.PosID) {
+		h.broadCastRoom(EvHostChange, data.DeskID, hostChange{PosID: data.PosID, UserName: name}, nil)
+	}
 	h.broadCastHouse(EvStatusChange, houseStatusChange{DeskID: data.DeskID, PosID: data.PosID, State: 1, UserName: c.UserName()})
 	h.broadCastRoom(EvPosStatusChange, data.DeskID, posStatusChange{PosID: data.PosID, State: 1, UserName: c.UserName()}, s)
 
@@ -288,9 +316,56 @@ func (h *Hub) onPrepare(s wssrv.Conn) {
 	h.emitNoData(c, EvPrepareSuccess)
 	h.broadCastRoom(EvPosStatusChange, c.deskID, posStatusChange{PosID: c.posID, State: 2}, s)
 
-	if d.AllPrepared() {
-		h.startGame(c.deskID)
+	// 主持模式：已入座玩家全部准备好也不自动开牌，由主持人决定何时开牌（HOST_START_GAME）
+	if d.AllPrepared() && !d.GameInProgress() {
+		if host := d.Seat(d.HostPosID); host != nil {
+			msg := "已入座玩家全部准备完毕，等待主持人[" + host.UserName + "]开牌"
+			if n := len(d.EmptySeats()); n > 0 {
+				msg += "（还有 " + itoa(n) + " 个空位，可开牌用机器人补位）"
+			}
+			h.broadCastRoom(EvUserMessageOut, c.deskID, userMessage{Type: "SYS", PosID: d.HostPosID, Msg: msg, ID: h.nextID(), Time: now()}, nil)
+		}
 	}
+}
+
+// onHostStartGame 主持人开牌：仅主持人、已入座玩家全准备且对局未进行时生效。
+// 载荷 fillBots=true 时把空位填充为机器人开局（人机模式/单人练习）；
+// 有空位但未确认填充则拒绝开牌。
+// 主持人断线（座位保留）期间主持权不变；真正离桌则由 releaseSeat 顺延给下一人。
+func (h *Hub) onHostStartGame(s wssrv.Conn, data hostStartGameReq) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	c, d := h.clientInRoom(s)
+	if c == nil || d == nil {
+		return
+	}
+	if d.GameInProgress() {
+		h.emit(c, EvMessage, msgPayload{Msg: "对局正在进行中"})
+		return
+	}
+	if d.HostPosID != c.posID {
+		h.emit(c, EvMessage, msgPayload{Msg: "只有主持人才能开牌"})
+		return
+	}
+	if !d.AllPrepared() {
+		h.emit(c, EvMessage, msgPayload{Msg: "还有玩家未准备，不能开牌"})
+		return
+	}
+	if empty := d.EmptySeats(); len(empty) > 0 && !data.FillBots {
+		h.emit(c, EvMessage, msgPayload{Msg: "还有 " + itoa(len(empty)) + " 个空位，开牌时请确认是否填充为机器人"})
+		return
+	}
+	if filled := d.FillBots(); len(filled) > 0 {
+		h.logger.Info("主持人填充机器人开局", "user", c.UserName(), "desk", c.deskID, "bots", len(filled))
+		for _, pos := range filled {
+			seat := d.Seat(pos)
+			h.broadCastRoom(EvPosStatusChange, c.deskID, posStatusChange{PosID: pos, State: 2, UserName: seat.UserName, IsBot: true}, nil)
+		}
+		h.broadCastRoom(EvUserMessageOut, c.deskID, userMessage{Type: "SYS", PosID: d.HostPosID, Msg: "主持人将 " + itoa(len(filled)) + " 个空位填充为机器人，游戏开始", ID: h.nextID(), Time: now()}, nil)
+	}
+	h.logger.Info("主持人开牌", "user", c.UserName(), "desk", c.deskID, "pos", c.posID)
+	h.startGame(c.deskID)
 }
 
 // onCancelPrepare 取消准备：仅已准备且对局未开始（叫分/出牌中不可取消）时生效
@@ -337,6 +412,7 @@ func (h *Hub) onDisconnect(s wssrv.Conn) {
 	d := h.lobby.Desk(deskID)
 	if deskID != -1 && d != nil && d.GameInProgress() {
 		// 游戏进行中断线：保留座位与对局，限时等待重连
+		// （座位保留期间不释放，主持权不变；重连后主持人标识依旧）
 		h.sessions.remove(s)
 		h.holdSeatForReconnect(d, userName, posID)
 		h.logger.Warn("玩家游戏中掉线，保留座位等待重连", "user", userName, "desk", deskID, "pos", posID)
@@ -362,6 +438,14 @@ func (h *Hub) releaseSeat(d *table.Desk, posID int, exclude wssrv.Conn) {
 	// 旧 js 误把 posId 当房间状态写入 updateRoomStatus(deskId, posId, 0)；
 	// 已查证前端不消费 desk.state，此处修正为语义正确的等待态 0
 	d.SetState(0)
+	// 主持人离桌：主持权自动顺延到下一个有人的座位；全桌无人则复位为 -1
+	if newHost, changed := d.TransferHostFrom(posID); changed {
+		name := ""
+		if newHost != -1 {
+			name = d.Seat(newHost).UserName
+		}
+		h.broadCastRoom(EvHostChange, d.DeskID, hostChange{PosID: newHost, UserName: name}, nil)
+	}
 	h.broadCastRoom(EvPosStatusChange, d.DeskID, posStatusChange{PosID: posID, State: 0}, exclude)
 	h.broadCastHouse(EvStatusChange, houseStatusChange{DeskID: d.DeskID, PosID: posID, State: 0, UserName: ""})
 }

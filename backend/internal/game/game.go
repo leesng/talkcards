@@ -454,6 +454,15 @@ func (g *Game) Turn() int     { return g.turn }
 func (g *Game) TrickPos() int { return g.trick.Pos }
 func (g *Game) TmpFeng() int  { return g.trick.Pot }
 
+// TrickTop 当前一轮需要压制的牌型；ok=false 表示自由首出（无需压牌）。
+// 判断与 validatePlay 一致：无有效上手（Pos==-1）或一圈压回出牌人本人（Pos==轮到者）均为首出。
+func (g *Game) TrickTop() (top card.Shape, ok bool) {
+	if g.trick.Pos == -1 || g.trick.Pos == g.turn {
+		return card.Shape{}, false
+	}
+	return g.trick.Top, true
+}
+
 // CtxScore 叫分上下文，恒 {1,2,3}（旧 contextScore 从未变更）
 func (g *Game) CtxScore() [3]int { return [3]int{1, 2, 3} }
 

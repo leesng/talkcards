@@ -37,7 +37,8 @@ if [[ "${1:-}" == "test" ]]; then
   SRV_LOG="$(mktemp /tmp/gtp-audit-server.XXXXXX.log)"
   SRV_DIR="$(mktemp -d /tmp/gtp-audit-srv.XXXXXX)" # 服务在临时目录运行，默认 ./talkcards.db 不污染仓库
   # --reconnect-timeout 5：让 e2e 的"掉线超时判逃跑"场景可测
-  (cd "${SRV_DIR}" && PORT="${PORT}" exec "${out}" --reconnect-timeout 5) >"${SRV_LOG}" 2>&1 &
+  # --bot-delay-*：验收环境机器人延迟调小（默认 1-3 秒，会让场景 F 在 180s 限时内打不完）
+  (cd "${SRV_DIR}" && PORT="${PORT}" exec "${out}" --reconnect-timeout 5 --bot-delay-min-ms 30 --bot-delay-max-ms 100) >"${SRV_LOG}" 2>&1 &
   SRV_PID=$!
   trap 'kill "${SRV_PID}" 2>/dev/null || true; wait "${SRV_PID}" 2>/dev/null || true' EXIT
 

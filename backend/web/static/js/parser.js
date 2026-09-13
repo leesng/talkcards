@@ -516,3 +516,149 @@ function validate(cards) {
     }
 }
 
+// ==================== 出牌提示 ====================
+// 与后端 internal/card/shape.go 对齐：牌型对象 {kind, rank, len}，
+// kind 取值 single|pair|triple|bomb|kingbomb。改压牌规则时两边必须同步。
+
+// 由 CTX_PLAY_CHANGE 的牌型描述（type/key/len）还原上家牌型；无有效描述返回 null
+function parseShape(type, rank, len) {
+    var n = len > 0 ? len : 0;
+    if (!type || !n) {
+        return null;
+    }
+    if (type === 'A') {
+        return { kind: 'single', rank: rank, len: 1 };
+    }
+    if (type === 'AA') {
+        return { kind: 'pair', rank: rank, len: 2 };
+    }
+    if (type === 'AAA') {
+        return { kind: 'triple', rank: rank, len: 3 };
+    }
+    if (type.indexOf('AAAA') === 0) {
+        return { kind: 'bomb', rank: rank, len: n };
+    }
+    if (type.indexOf('XKING') === 0) {
+        return { kind: 'kingbomb', rank: 16, len: n };
+    }
+    if (type.indexOf('DKING') === 0) {
+        return { kind: 'kingbomb', rank: 17, len: n };
+    }
+    return null;
+}
+
+// 候选牌型 c 能否压住桌面牌型 t（规则见 game-rules.md「压牌」与「大小王规则」）
+function shapeBeats(c, t) {
+    if (!c || !t) {
+        return false;
+    }
+    var cKing = c.kind === 'kingbomb';
+    var tKing = t.kind === 'kingbomb';
+    if (cKing && tKing) {
+        return c.len > t.len || (c.len === t.len && c.rank > t.rank);
+    }
+    if (cKing) {
+        return t.len <= 2 * c.len - 1;
+    }
+    if (tKing) {
+        return c.kind === 'bomb' && c.rank !== 16 && c.rank !== 17 && c.len > 2 * t.len - 1;
+    }
+    if (c.kind === 'bomb' && t.kind === 'bomb') {
+        if (c.len === t.len) {
+            return c.rank > t.rank;
+        }
+        return c.rank !== 16 && c.rank !== 17 && c.len > t.len;
+    }
+    if (c.kind === 'bomb') {
+        return c.rank !== 16 && c.rank !== 17;
+    }
+    if (c.kind === t.kind && c.len === t.len) {
+        return c.rank > t.rank;
+    }
+    return false;
+}
+
+// 一组同值牌取 l 张时的全部合法解读（与后端 Classify 一致：基础牌型在前，王炸在后）
+function shapesOfPlay(value, l) {
+    var shapes = [];
+    if (l === 1) {
+        shapes.push({ kind: 'single', rank: value, len: 1 });
+    } else if (l === 2) {
+        shapes.push({ kind: 'pair', rank: value, len: 2 });
+    } else if (l === 3) {
+        shapes.push({ kind: 'triple', rank: value, len: 3 });
+    } else {
+        shapes.push({ kind: 'bomb', rank: value, len: l });
+    }
+    if ((value === 16 || value === 17) && l >= 3 && l <= 6) {
+        shapes.push({ kind: 'kingbomb', rank: value, len: l });
+    }
+    return shapes;
+}
+
+// 手牌候选：按「孤张单 → 对 → 三 → 炸弹」分组、组内牌值升序（与 e2e-audit 机器人一致）。
+// 炸弹组例外：先按张数升序（4炸<5炸<6炸…），同张数再按牌面升序。
+// 每个牌值按现有张数整体成组，不拆对/三：1=孤张单、2=对、3=三、
+// ≥4 张或 3 张以上同王=炸弹。返回按组序排列的候选，每项为该组全部牌。
+function hintCandidates(hand) {
+    var groups = {};
+    var order = [];
+    hand.forEach(function (card) {
+        if (!groups[card.value]) {
+            groups[card.value] = [];
+            order.push(card.value);
+        }
+        groups[card.value].push(card);
+    });
+    order.sort(function (a, b) {
+        return a - b;
+    });
+    var buckets = [[], [], [], []]; // 单/对/三/炸弹
+    order.forEach(function (value) {
+        var cards = groups[value];
+        var gi = cards.length - 1; // 1→单 2→对 3→三 ≥4→炸弹
+        if ((value === 16 || value === 17) && cards.length >= 3) {
+            gi = 3; // 3 张以上同王按王炸处理，不当作三条
+        }
+        if (gi > 3) {
+            gi = 3;
+        }
+        buckets[gi].push(cards);
+    });
+    // 炸弹组：先按张数（4炸<5炸<6炸…），张数相同再按牌面从小到大
+    buckets[3].sort(function (a, b) {
+        if (a.length !== b.length) {
+            return a.length - b.length;
+        }
+        return a[0].value - b[0].value;
+    });
+    return buckets[0].concat(buckets[1], buckets[2], buckets[3]);
+}
+
+// 在手牌中选出"刚好大过上家"的一组牌；仅做选择，不负责出牌。
+// 组必须保持整体：存在对子/三条时不会拆成单张去跟牌，跟不住则返回 null（建议不出）。
+// topShape 为 null 表示自由首出（一轮第一手）：按 孤张单→对→三→炸弹 取组序最前的一组。
+function findHintCards(hand, topShape) {
+    if (!hand || !hand.length) {
+        return null;
+    }
+    var cands = hintCandidates(hand);
+
+    // 自由首出：没有"上一手"可压，取组序最前的一组整体出
+    if (!topShape) {
+        return cands.length ? cands[0].slice() : null;
+    }
+
+    // 跟牌：按组序找第一组能压住的（组内牌值升序，即最"刚好"的一组）
+    for (var i = 0; i < cands.length; i++) {
+        var cards = cands[i];
+        var shapes = shapesOfPlay(cards[0].value, cards.length);
+        for (var j = 0; j < shapes.length; j++) {
+            if (shapeBeats(shapes[j], topShape)) {
+                return cards.slice();
+            }
+        }
+    }
+    return null;
+}
+

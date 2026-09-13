@@ -31,7 +31,10 @@
     <div class="full-screen house" v-if="where === 1">
       <div class="quick-bar">
         <span class="brand">🂡 沟通牌 · 大厅</span>
-        <button @click="showHistory()">我的战绩</button>
+        <div class="quick-actions">
+          <span class="current-user" title="当前用户">👤 {{posState.p3.name}}</span>
+          <button @click="showHistory()">我的战绩</button>
+        </div>
       </div>
       <div class="lobby-container">
       <div v-for="desk in desks" class="desk">
@@ -47,6 +50,20 @@
     <!-- 房间 -->
     <div class="full-screen room" v-if="where === 2">
 
+      <!-- 人机模式开牌确认弹窗：主持人开牌但桌上仍有空位时询问是否填充机器人 -->
+      <div class="modal-mask" v-if="botConfirm.show">
+        <div class="modal-panel">
+          <div class="modal-icon">🤖</div>
+          <div class="modal-title">人机模式</div>
+          <p class="modal-text">当前还有 <b>{{ botConfirm.empty }}</b> 个空位</p>
+          <p class="modal-sub">可填充机器人立即开牌，或继续等待真人入座</p>
+          <div class="modal-btns">
+            <button class="btn-gold" @click="confirmBotFill">填充机器人并开牌</button>
+            <button class="btn-ghost" @click="cancelBotFill">等待真人</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 牌桌：木沿造型由 CSS 画（.table-rim），绒布纹理来自 images/desktop.svg（.table-felt） -->
       <div class="table-rim">
         <div class="table-felt"></div>
@@ -59,8 +76,9 @@
           <button class="btn btn-call" @click="callScore(3)">第一个出牌</button>
         </template>
         <template v-if="roomState.state === 2">
+          <button class="btn" @click="passCards" v-if="roomState.ctxCard.ctxPos && roomState.ctxCard.ctxPos !== roomState.ctxPos">不出</button>
           <button class="btn" @click="playCards">出牌</button>
-          <button class="btn" @click="passCards" v-if="roomState.ctxCard.ctxPos !== roomState.ctxPos">不出</button>
+          <button class="btn" @click="hintCards">提示</button>
         </template>
 
       </div>
@@ -70,23 +88,27 @@
         <button v-if="posState.p3.state < 2" @click="exitRoom" class="btn-exit-room">返回大厅</button>
         <button v-if="posState.p3.state < 2" @click="prepare" class="btn-prepare" autofocus>准备</button>
         <button v-if="posState.p3.state === 2 && (roomState.state === 0 || roomState.state === 3)" @click="cancelPrepare" class="btn-prepare">取消准备</button>
+        <!-- 主持模式：全员已准备后由主持人决定是否开牌 -->
+        <button v-if="isHost && posState.p3.state === 2 && allPrepared && (roomState.state === 0 || roomState.state === 3)" @click="hostStartGame" class="btn-prepare btn-start-game">开牌</button>
       </div>
 
-      <!-- 记分区：本方 / 对方总得分 + 场上待收分（本方 = 自己所在队，p1/p3/p5/p7 锚位） -->
+      <!-- 记分区：得分（已出完者收分，计入胜负线）/ 抓分（全队累计收取）+ 场上待收分 -->
       <div class="feng-system" v-if="posState.p3.state >= 2">
-        <div class="score-row" :class="{'score-lead': myFeng > opFeng}">
+        <div class="score-board">
           <span class="score-tag score-tag-mine">本方</span>
-          <span class="score-names">{{posState.p1.name}}、{{posState.p3.name}}、{{posState.p5.name}}、{{posState.p7.name}}</span>
-          <span class="score-num">{{myFeng}}</span>
-        </div>
-        <div class="score-row" :class="{'score-lead': opFeng > myFeng}">
+          <span class="score-side">
+            <span class="score-num" :class="{'score-num-lead': myScore > opScore}">{{myScore}}</span>
+            <span class="score-grab">抓 {{myFeng}}</span>
+          </span>
+          <span class="score-vs">:</span>
+          <span class="score-side">
+            <span class="score-num" :class="{'score-num-lead': opScore > myScore}">{{opScore}}</span>
+            <span class="score-grab">抓 {{opFeng}}</span>
+          </span>
           <span class="score-tag score-tag-foe">对方</span>
-          <span class="score-names">{{posState.p0.name}}、{{posState.p2.name}}、{{posState.p4.name}}、{{posState.p6.name}}</span>
-          <span class="score-num">{{opFeng}}</span>
-        </div>
-        <div class="score-pot" :class="{'score-pot-live': roomState.tmpFeng > 0}">
-          <span>场上待收分</span>
-          <span class="score-pot-num">{{roomState.tmpFeng}}</span>
+          <span class="score-pot" :class="{'score-pot-live': roomState.tmpFeng > 0}">
+            <span>待收</span><span class="score-pot-num">{{roomState.tmpFeng}}</span>
+          </span>
         </div>
       </div>
 
@@ -94,43 +116,64 @@
       <div class="players">
         <div class="screen-center">
           <div class="player-wrapper player-p0" :class="{'active-turn':roomState.ctxPos === 'p0' && roomState.state === 2}" v-if="posState.p0.state">
-            <player-avatar :label="seatLabel(0)" :team="seatTeam(0)" :is-dizhu="posState.p0.isDizhu"></player-avatar>
-            <div class="player-name text-center">{{posState.p0.name}}</div>
+            <player-avatar :label="seatLabel(posIdByDirection(0))" :team="seatTeam(posIdByDirection(0))" :is-dizhu="posState.p0.isDizhu"></player-avatar>
+            <div class="player-name text-center">{{posState.p0.name}}<span v-if="isHostPos(0)" class="host-tag">主持</span><span v-if="posState.p0.isBot" class="bot-tag">机器人</span></div>
             <div class="text-center player-status" v-if="posState.p0.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
+            <div class="seat-hud seat-hud-flip" v-if="roomState.state < 3">
+              <div class="hud-row"><span class="hud-label">剩余</span><span class="hud-count" :class="{'low-count': roomState.state === 2 && posState.p0.cards.length <= 10}">{{posState.p0.cards.length}}</span><span class="hud-unit">张</span></div>
+              <div class="hud-row"><span class="hud-label">得分</span><span class="tip-score" :class="{ 'tip-score-live': posState.p0.sumFeng > 0 }">{{posState.p0.sumFeng}}分</span></div>
+            </div>
+            <div class="icon-group seat-clock seat-clock-right" v-if="roomState.ctxPos == 'p0' && roomState.state < 3">
+              <span class="clock">{{roomState.timeout}}</span>
+            </div>
           </div>
           <div class="player-wrapper player-p1" :class="{'active-turn':roomState.ctxPos === 'p1' && roomState.state === 2}" v-if="posState.p1.state">
-            <player-avatar :label="seatLabel(1)" :team="seatTeam(1)" :is-dizhu="posState.p1.isDizhu"></player-avatar>
-            <div class="player-name text-center">{{posState.p1.name}}</div>
+            <player-avatar :label="seatLabel(posIdByDirection(1))" :team="seatTeam(posIdByDirection(1))" :is-dizhu="posState.p1.isDizhu"></player-avatar>
+            <div class="player-name text-center">{{posState.p1.name}}<span v-if="isHostPos(1)" class="host-tag">主持</span><span v-if="posState.p1.isBot" class="bot-tag">机器人</span></div>
             <div class="text-center player-status" v-if="posState.p1.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p2" :class="{'active-turn':roomState.ctxPos === 'p2' && roomState.state === 2}" v-if="posState.p2.state">
-            <player-avatar :label="seatLabel(2)" :team="seatTeam(2)" :is-dizhu="posState.p2.isDizhu"></player-avatar>
-            <div class="player-name text-center">{{posState.p2.name}}</div>
+            <player-avatar :label="seatLabel(posIdByDirection(2))" :team="seatTeam(posIdByDirection(2))" :is-dizhu="posState.p2.isDizhu"></player-avatar>
+            <div class="player-name text-center">{{posState.p2.name}}<span v-if="isHostPos(2)" class="host-tag">主持</span><span v-if="posState.p2.isBot" class="bot-tag">机器人</span></div>
             <div class="text-center player-status" v-if="posState.p2.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p4" :class="{'active-turn':roomState.ctxPos === 'p4' && roomState.state === 2}" v-if="posState.p4.state">
-            <player-avatar :label="seatLabel(4)" :team="seatTeam(4)" :is-dizhu="posState.p4.isDizhu"></player-avatar>
-            <div class="player-name text-center">{{posState.p4.name}}</div>
+            <player-avatar :label="seatLabel(posIdByDirection(4))" :team="seatTeam(posIdByDirection(4))" :is-dizhu="posState.p4.isDizhu"></player-avatar>
+            <div class="player-name text-center">{{posState.p4.name}}<span v-if="isHostPos(4)" class="host-tag">主持</span><span v-if="posState.p4.isBot" class="bot-tag">机器人</span></div>
             <div class="text-center player-status" v-if="posState.p4.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p5" :class="{'active-turn':roomState.ctxPos === 'p5' && roomState.state === 2}" v-if="posState.p5.state">
-            <player-avatar :label="seatLabel(5)" :team="seatTeam(5)" :is-dizhu="posState.p5.isDizhu"></player-avatar>
-            <div class="player-name text-center">{{posState.p5.name}}</div>
+            <player-avatar :label="seatLabel(posIdByDirection(5))" :team="seatTeam(posIdByDirection(5))" :is-dizhu="posState.p5.isDizhu"></player-avatar>
+            <div class="player-name text-center">{{posState.p5.name}}<span v-if="isHostPos(5)" class="host-tag">主持</span><span v-if="posState.p5.isBot" class="bot-tag">机器人</span></div>
             <div class="text-center player-status" v-if="posState.p5.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p6" :class="{'active-turn':roomState.ctxPos === 'p6' && roomState.state === 2}" v-if="posState.p6.state">
-            <player-avatar :label="seatLabel(6)" :team="seatTeam(6)" :is-dizhu="posState.p6.isDizhu"></player-avatar>
-            <div class="player-name text-center">{{posState.p6.name}}</div>
+            <player-avatar :label="seatLabel(posIdByDirection(6))" :team="seatTeam(posIdByDirection(6))" :is-dizhu="posState.p6.isDizhu"></player-avatar>
+            <div class="player-name text-center">{{posState.p6.name}}<span v-if="isHostPos(6)" class="host-tag">主持</span><span v-if="posState.p6.isBot" class="bot-tag">机器人</span></div>
             <div class="text-center player-status" v-if="posState.p6.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
+            <div class="seat-hud" v-if="roomState.state < 3">
+              <div class="hud-row"><span class="hud-label">剩余</span><span class="hud-count" :class="{'low-count': roomState.state === 2 && posState.p6.cards.length <= 10}">{{posState.p6.cards.length}}</span><span class="hud-unit">张</span></div>
+              <div class="hud-row"><span class="hud-label">得分</span><span class="tip-score" :class="{ 'tip-score-live': posState.p6.sumFeng > 0 }">{{posState.p6.sumFeng}}分</span></div>
+            </div>
+            <div class="icon-group seat-clock seat-clock-right" v-if="roomState.ctxPos == 'p6' && roomState.state < 3">
+              <span class="clock">{{roomState.timeout}}</span>
+            </div>
           </div>
           <div class="player-wrapper player-p7" :class="{'active-turn':roomState.ctxPos === 'p7' && roomState.state === 2}" v-if="posState.p7.state">
-            <player-avatar :label="seatLabel(7)" :team="seatTeam(7)" :is-dizhu="posState.p7.isDizhu"></player-avatar>
-            <div class="player-name text-center">{{posState.p7.name}}</div>
+            <player-avatar :label="seatLabel(posIdByDirection(7))" :team="seatTeam(posIdByDirection(7))" :is-dizhu="posState.p7.isDizhu"></player-avatar>
+            <div class="player-name text-center">{{posState.p7.name}}<span v-if="isHostPos(7)" class="host-tag">主持</span><span v-if="posState.p7.isBot" class="bot-tag">机器人</span></div>
             <div class="text-center player-status" v-if="posState.p7.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
+            <div class="seat-hud" v-if="roomState.state < 3">
+              <div class="hud-row"><span class="hud-label">剩余</span><span class="hud-count" :class="{'low-count': roomState.state === 2 && posState.p7.cards.length <= 10}">{{posState.p7.cards.length}}</span><span class="hud-unit">张</span></div>
+              <div class="hud-row"><span class="hud-label">得分</span><span class="tip-score" :class="{ 'tip-score-live': posState.p7.sumFeng > 0 }">{{posState.p7.sumFeng}}分</span></div>
+            </div>
+            <div class="icon-group seat-clock seat-clock-left" v-if="roomState.ctxPos == 'p7' && roomState.state < 3">
+              <span class="clock">{{roomState.timeout}}</span>
+            </div>
           </div>
           <div class="player-wrapper player-p3" :class="{'active-turn':roomState.ctxPos === 'p3' && roomState.state === 2}" v-if="posState.p3.state">
-            <player-avatar :label="seatLabel(3)" :team="seatTeam(3)" :is-dizhu="posState.p3.isDizhu"></player-avatar>
-            <div class="player-name text-center">{{posState.p3.name}}</div>
+            <player-avatar :label="seatLabel(posIdByDirection(3))" :team="seatTeam(posIdByDirection(3))" :is-dizhu="posState.p3.isDizhu"></player-avatar>
+            <div class="player-name text-center">{{posState.p3.name}}<span v-if="isHostPos(3)" class="host-tag">主持</span><span v-if="posState.p3.isBot" class="bot-tag">机器人</span></div>
             <div class="text-center player-status" v-if="posState.p3.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
         </div>
@@ -143,17 +186,13 @@
           <div @dragstart="onDragstart($event)" draggable="true" @dragenter="onDragenter($event)"  @click="selectCard(card)" v-for="(card,index) in posState.p3.cards"
             class="card" :class="'card-' + card.value + '-' + card.type" :style="{left:index * 20 + 'px',top:card.selected ? '-20px' : 0}">
           </div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：{{posState.p3.cards.length}}张 得分：{{posState.p3.sumFeng}}</div>
+          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：<span :class="{'low-count': roomState.state === 2 && posState.p3.cards.length <= 10}">{{posState.p3.cards.length}}</span>张 <span class="tip-score" :class="{ 'tip-score-live': posState.p3.sumFeng > 0 }">{{posState.p3.sumFeng}}分</span></div>
         </div>
         <!-- p0牌列表 -->
         <div class="card-group card-group-p0" :style="{width:posState.p0.cards.length * 2 + 88 + 'px'}">
           <div v-for="(card,index) in posState.p0.cards" class="card" :class="roomState.state === 3 ? 'card-' + card.value + '-' + card.type : 'card-unknow'"
             :style="{left:index * 2 + 'px'}">
           </div>
-          <div class="icon-group icon-group-left text-left" v-if="roomState.ctxPos == 'p0' && roomState.state < 3">
-            <span class="clock">{{roomState.timeout}}</span>
-          </div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：{{posState.p0.cards.length}}张 得分：{{posState.p0.sumFeng}}</div>
         </div>
         <!-- p1牌列表 -->
         <div class="card-group card-group-p1" :style="{width:posState.p1.cards.length * 2 + 88 + 'px'}">
@@ -163,7 +202,7 @@
           <div class="icon-group icon-group-left text-left" v-if="roomState.ctxPos == 'p1' && roomState.state < 3">
             <span class="clock">{{roomState.timeout}}</span>
           </div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：{{posState.p1.cards.length}}张 得分：{{posState.p1.sumFeng}}</div>
+          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：<span :class="{'low-count': roomState.state === 2 && posState.p1.cards.length <= 10}">{{posState.p1.cards.length}}</span>张 <span class="tip-score" :class="{ 'tip-score-live': posState.p1.sumFeng > 0 }">{{posState.p1.sumFeng}}分</span></div>
         </div>
         <!-- p2牌列表 -->
         <div class="card-group card-group-p2" :style="{width:posState.p2.cards.length * 2 + 88 + 'px'}">
@@ -173,7 +212,7 @@
           <div class="icon-group icon-group-left text-left" v-if="roomState.ctxPos == 'p2' && roomState.state < 3">
             <span class="clock">{{roomState.timeout}}</span>
           </div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：{{posState.p2.cards.length}}张 得分：{{posState.p2.sumFeng}}</div>
+          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：<span :class="{'low-count': roomState.state === 2 && posState.p2.cards.length <= 10}">{{posState.p2.cards.length}}</span>张 <span class="tip-score" :class="{ 'tip-score-live': posState.p2.sumFeng > 0 }">{{posState.p2.sumFeng}}分</span></div>
         </div>
         <!-- p4牌列表 -->
         <div class="card-group card-group-p4" :style="{width:posState.p4.cards.length * 2 + 88 + 'px'}">
@@ -183,7 +222,7 @@
           <div class="icon-group icon-group-left text-left" v-if="roomState.ctxPos == 'p4' && roomState.state < 3">
             <span class="clock">{{roomState.timeout}}</span>
           </div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：{{posState.p4.cards.length}}张 得分：{{posState.p4.sumFeng}}</div>
+          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：<span :class="{'low-count': roomState.state === 2 && posState.p4.cards.length <= 10}">{{posState.p4.cards.length}}</span>张 <span class="tip-score" :class="{ 'tip-score-live': posState.p4.sumFeng > 0 }">{{posState.p4.sumFeng}}分</span></div>
         </div>
         <!-- p5牌列表 -->
         <div class="card-group card-group-p5" :style="{width:posState.p5.cards.length * 2 + 88 + 'px'}">
@@ -193,27 +232,19 @@
           <div class="icon-group icon-group-left text-left" v-if="roomState.ctxPos == 'p5' && roomState.state < 3">
             <span class="clock">{{roomState.timeout}}</span>
           </div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：{{posState.p5.cards.length}}张 得分：{{posState.p5.sumFeng}}</div>
+          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：<span :class="{'low-count': roomState.state === 2 && posState.p5.cards.length <= 10}">{{posState.p5.cards.length}}</span>张 <span class="tip-score" :class="{ 'tip-score-live': posState.p5.sumFeng > 0 }">{{posState.p5.sumFeng}}分</span></div>
         </div>
         <!-- p6牌列表 -->
         <div class="card-group card-group-p6" :style="{width:posState.p6.cards.length * 2 + 88 + 'px'}">
           <div v-for="(card,index) in posState.p6.cards" class="card" :class="roomState.state === 3 ? 'card-' + card.value + '-' + card.type : 'card-unknow'"
             :style="{left:index * 2 + 'px'}">
           </div>
-          <div class="icon-group icon-group-left text-left" v-if="roomState.ctxPos == 'p6' && roomState.state < 3">
-            <span class="clock">{{roomState.timeout}}</span>
-          </div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：{{posState.p6.cards.length}}张 得分：{{posState.p6.sumFeng}}</div>
         </div>
         <!-- p7牌列表 -->
         <div class="card-group card-group-p7" :style="{width:posState.p7.cards.length * 2 + 88 + 'px'}">
           <div v-for="(card,index) in posState.p7.cards" class="card" :class="roomState.state === 3 ? 'card-' + card.value + '-' + card.type : 'card-unknow'"
             :style="{left:index * 2 + 'px'}">
           </div>
-          <div class="icon-group icon-group-left text-left" v-if="roomState.ctxPos == 'p7' && roomState.state < 3">
-            <span class="clock">{{roomState.timeout}}</span>
-          </div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：{{posState.p7.cards.length}}张 得分：{{posState.p7.sumFeng}}</div>
         </div>
       </div>
 
@@ -413,6 +444,8 @@
           where: 0,//0登录界面 1大厅 2房间,
           posId: '',//座位号
           deskId: '',//桌号
+          hostPosId: -1,//主持人座位号（第一个入座者，权限不转移）；-1=本桌无主持
+          botConfirm: { show: false, empty: 0 },//人机模式开牌确认弹窗
           desks: [],
           client: '',
           historyPage: 1,//战绩当前页
@@ -445,6 +478,7 @@
               ctxCards: [],
               isPass: false,
               isDizhu: false,
+              isBot: false,
               callScore: -1,
               name: '游客',
               sumFeng:0,
@@ -455,6 +489,7 @@
               ctxCards: [],
               isPass: false,
               isDizhu: false,
+              isBot: false,
               callScore: -1,
               name: '游客',
               sumFeng:0,
@@ -465,6 +500,7 @@
               ctxCards: [],
               isPass: false,
               isDizhu: false,
+              isBot: false,
               callScore: -1,
               name: '游客',
               sumFeng:0,
@@ -475,6 +511,7 @@
               ctxCards: [],
               isPass: false,
               isDizhu: false,
+              isBot: false,
               callScore: -1,
               name: '游客',
               sumFeng:0,
@@ -485,6 +522,7 @@
               ctxCards: [],
               isPass: false,
               isDizhu: false,
+              isBot: false,
               callScore: -1,
               name: '游客',
               sumFeng:0,
@@ -495,6 +533,7 @@
               ctxCards: [],
               isPass: false,
               isDizhu: false,
+              isBot: false,
               callScore: -1,
               name: '游客',
               sumFeng:0,
@@ -505,6 +544,7 @@
               ctxCards: [],
               isPass: false,
               isDizhu: false,
+              isBot: false,
               callScore: -1,
               name: '游客',
               sumFeng:0,
@@ -515,6 +555,7 @@
               ctxCards: [],
               isPass: false,
               isDizhu: false,
+              isBot: false,
               callScore: -1,
               name: '游客',
               sumFeng:0,
@@ -530,6 +571,36 @@
         // 对方（偶数座位）总得分
         opFeng: function () {
           return this.posState.p0.sumFeng + this.posState.p2.sumFeng + this.posState.p4.sumFeng + this.posState.p6.sumFeng;
+        },
+        // 得分 = 已出完手牌（cards.length === 0）队友收取的分之和，计入胜负线（见 game-rules.md 抓分与得分）
+        myScore: function () {
+          var sum = 0;
+          ['p1', 'p3', 'p5', 'p7'].forEach(function (d) {
+            var p = this.posState[d];
+            if (p.cards.length === 0) sum += p.sumFeng;
+          }, this);
+          return sum;
+        },
+        opScore: function () {
+          var sum = 0;
+          ['p0', 'p2', 'p4', 'p6'].forEach(function (d) {
+            var p = this.posState[d];
+            if (p.cards.length === 0) sum += p.sumFeng;
+          }, this);
+          return sum;
+        },
+        // 是否主持人（第一个入座者；主持权不转移，主持人离桌/断线权限保留）
+        isHost: function () {
+          return this.hostPosId !== -1 && this.hostPosId === this.posId;
+        },
+        // 已入座玩家全部准备好（空座不阻塞；人未齐时主持人可开牌填充机器人）
+        allPrepared: function () {
+          for (var i = 0; i < 8; i++) {
+            var direct = this.getDirectionByPosId(i);
+            var state = this.posState[direct].state;
+            if (state !== 0 && state !== 2) return false;
+          }
+          return true;
         }
       },
       mounted: function () {
@@ -563,8 +634,9 @@
             this.where = 2;
             this.posId = data.posId;
             this.deskId = data.deskId;
+            if (typeof data.hostPosId === 'number') this.hostPosId = data.hostPosId;
             data.posInfos.forEach(function (pos) {
-              this.updatePosStatus(pos.posId, pos.state, pos.userName);
+              this.updatePosStatus(pos.posId, pos.state, pos.userName, pos.isBot);
             }.bind(this));
             layer.closeAll();
             layer.msg('已重新连接到未结束的对局');
@@ -579,8 +651,9 @@
             this.where = 2;
             this.posId = data.posId;
             this.deskId = data.deskId;
+            if (typeof data.hostPosId === 'number') this.hostPosId = data.hostPosId;
             data.posInfos.forEach(function (pos) {
-              this.updatePosStatus(pos.posId, pos.state, pos.userName);
+              this.updatePosStatus(pos.posId, pos.state, pos.userName, pos.isBot);
             }.bind(this));
             layer.closeAll();
           }.bind(this));
@@ -606,13 +679,18 @@
           }.bind(this));
 
           this.client.on('POS_STATUS_CHANGE', function (data) {
-            var direct = this.getDirectionByPosId(data.posId);
-            this.updatePosStatus(data.posId, data.state, data.userName);
+            this.updatePosStatus(data.posId, data.state, data.userName, data.isBot);
           }.bind(this));
+
+          // 主持权变更：空桌首坐获得主持权，全桌清空时复位（权限不转移）
+          this.client.on('HOST_CHANGE', function (data) {
+            this.hostPosId = (data && typeof data.posId === 'number') ? data.posId : -1;
+          }.bind(this));
+
 
           this.client.on('POS_STATUS_RESET', function (data) {
             data.pos.forEach(function (pos) {
-              this.updatePosStatus(pos.posId, data.state,data.userName);
+              this.updatePosStatus(pos.posId, data.state, data.userName, pos.isBot);
             }.bind(this));
           }.bind(this));
 
@@ -653,6 +731,7 @@
 
             // 初始化数据
             this.roomState.state = 1;
+            this.botConfirm.show = false;//开局后关闭人机模式确认弹窗（若仍打开）
             this.initCards(data.cards);
             this.posState.p0.callScore = -1;
             this.posState.p1.callScore = -1;
@@ -713,6 +792,9 @@
           this.client.on('SHOW_TOP_CARD', function (data) {
             this.roomState.state = 2;
             var direct = this.getDirectionByPosId(data.dizhuPosId);
+            // 新一局首出：清空上一局残留牌型，并把首出者记为"上一手出牌人"，
+            // 这样"不出"按钮/自动出牌/提示都按自由首出处理（否则会误判为跟牌）
+            this.roomState.ctxCard = { len: 0, key: '', type: '', ctxPos: direct };
             if (direct == 'p3') {
               data.topCards.forEach(function (card) {
                 card.selected = true;
@@ -745,7 +827,24 @@
               this.roomState.ctxCard.type = data.ctxData.type;
               this.roomState.ctxCard.ctxPos = direct;
             }
-            this.removeCards(direct, data.ctxData.cards);
+            // 一圈收分/接风后桌面已清空（clear 标记）：清掉上一圈各家残留的
+            // 出牌/过牌显示并重置"要压的牌型"——否则"不出"按钮/超时自动出牌/
+            // 提示都会误判为还要压上一圈的牌。出完牌者的最后一手保留展示。
+            if (data.clear) {
+              for (var ci = 0; ci < 8; ci++) {
+                var cd = this.getDirectionByPosId(ci);
+                if (data.isPass || cd !== direct) {
+                  this.posState[cd].ctxCards = [];
+                  this.posState[cd].isPass = false;
+                }
+              }
+              this.roomState.ctxCard = { len: 0, key: '', type: '', ctxPos: '' };
+            }
+            // 重连重放帧：手牌已由随后的 GAME_START 快照给出最新状态，
+            // 不能再从手里扣一次（一副牌 6 张同值同花色重复，误扣会导致手牌脱同步）
+            if (!data.replay) {
+              this.removeCards(direct, data.ctxData.cards);
+            }
             this.roomState.ctxPos = this.getDirectionByPosId(data.posId);
             //如果是自己出牌就清空上一轮自己出的牌
             if (this.roomState.ctxPos === 'p3') {
@@ -767,22 +866,82 @@
           }.bind(this))
 
           this.client.on('GAME_OVER', function (data) {
-            var msg = data.winner.indexOf(this.posId) > - 1 ? '恭喜你，你赢了' : '很遗憾，你输了';
-            var icon = data.winner.indexOf(this.posId) > - 1 ? 6 : 5;
+            var iWon = data.winner.indexOf(this.posId) > - 1;
+            var msg = iWon ? '恭喜你，你赢了' : '很遗憾，你输了';
+            var icon = iWon ? 6 : 5;
 
+            // 分牌分值：5 计 5 分，10/K 计 10 分（与 internal/card/dict.go 一致）
+            var cardScore = function (v) { return v === 5 ? 5 : (v === 10 || v === 13 ? 10 : 0); };
+            // 剩余手牌中的分牌总分（未出完者的分按规则记入对方）
+            var leftoverScore = function (direct) {
+              return this.posState[direct].cards.reduce(function (s, c) { return s + cardScore(c.value); }, 0);
+            }.bind(this);
 
-            var content = '<div class="msg-title msg-' + (icon === 6 ? 'success' : 'fail') + '">' + msg + '</div><div>本局游戏统计如下：</div>';
+            // 全队出完的胜局才带走对方未出手分牌；300 分终局胜队未出完，不带
+            // （server 侧 isGameOver 同逻辑；winner 恒为 4 人，不能用于判别）
+            // 按队聚合：mine = 本方（p1/p3/p5/p7），foe = 对方（p0/p2/p4/p6）
+            var teams = [
+              { key: 'mine', label: '本方', dirs: ['p1', 'p3', 'p5', 'p7'] },
+              { key: 'foe', label: '对方', dirs: ['p0', 'p2', 'p4', 'p6'] }
+            ];
+            teams.forEach(function (t) {
+              t.grab = 0;      // 全队抓分
+              t.leftover = 0;  // 未出完者剩牌分
+              t.allOut = true;
+              t.dirs.forEach(function (d) {
+                var p = this.posState[d];
+                t.grab += p.sumFeng;
+                if (p.cards.length > 0) {
+                  t.allOut = false;
+                  t.leftover += leftoverScore(d);
+                }
+              }.bind(this));
+            }.bind(this));
+            // 最终总分：全队出完的一方抓走对方未出完者的剩牌分
+            var mineTeam = teams[0];
+            var foeTeam = teams[1];
+            if (mineTeam.allOut && !foeTeam.allOut) {
+              mineTeam.final = mineTeam.grab + foeTeam.leftover;
+              foeTeam.final = foeTeam.grab;
+            } else if (foeTeam.allOut && !mineTeam.allOut) {
+              foeTeam.final = foeTeam.grab + mineTeam.leftover;
+              mineTeam.final = mineTeam.grab;
+            }
+            teams.forEach(function (t) {
+              if (t.final === undefined) t.final = t.grab;
+            });
+
+            var content = '<div class="msg-title msg-' + (iWon ? 'success' : 'fail') + '">' + msg + '</div>';
+            teams.forEach(function (t) {
+              var isWinnerTeam = t.dirs.indexOf(this.getDirectionByPosId(data.winner[0])) > -1;
+              content += '<div class="over-team ' + (t.key === 'mine' ? 'over-team-mine' : 'over-team-foe') + (isWinnerTeam ? ' over-team-win' : '') + '">'
+                + '<div class="over-team-head"><span class="over-team-name">' + t.label + (isWinnerTeam ? ' · 胜' : '') + '</span>'
+                + '<span class="over-head-grab">抓分 ' + t.grab + '</span>'
+                + '<span class="over-final">最终 ' + t.final + ' 分</span></div>';
+              t.dirs.forEach(function (d) {
+                var p = this.posState[d];
+                content += '<div class="over-row"><span class="over-name">' + p.name + '</span>'
+                  + '<span class="over-grab' + (p.sumFeng > 0 ? ' over-grab-live' : '') + '">抓 ' + p.sumFeng + ' 分</span>';
+                if (p.cards.length > 0) {
+                  content += '<span class="over-leftover">未出完 ' + p.cards.length + ' 张 · ' + leftoverScore(d) + ' 分记入对方</span>';
+                }
+                content += '</div>';
+              }.bind(this));
+              content += '</div>';
+            }.bind(this));
+
+            // 战绩分摊（原有信息保留在底部）
             var score = data.score * data.ratio * 2;
-            var halfScore = score / 2;
+            content += '<div class="over-record">';
             data.winner.forEach(function (id) {
               var direct = this.getDirectionByPosId(id);
-              content += '<div>' + this.posState[direct].name + '：+' + (score / data.winner.length) + '分</div>';
+              content += '<span class="over-record-item over-record-win">' + this.posState[direct].name + ' +' + (score / data.winner.length) + '</span>';
             }.bind(this));
             data.loser.forEach(function (id) {
               var direct = this.getDirectionByPosId(id);
-              content += '<div>' + this.posState[direct].name + '：-' + (score / data.loser.length) + '分</div>';
+              content += '<span class="over-record-item over-record-lose">' + this.posState[direct].name + ' -' + (score / data.loser.length) + '</span>';
             }.bind(this));
-
+            content += '</div>';
 
             layer.open({
               icon: icon,
@@ -1016,6 +1175,16 @@
         seatTeam: function (posId) {
           return posId % 2 === 0 ? 'a' : 'b';
         },
+        // 房间里的 p0-p7 是相对自己座位的"方向"，不是固定 posId：
+        // 反查该方向对应的真实座位号，编号才能跟着玩家（座位）走
+        posIdByDirection: function (d) {
+          for (var posId = 0; posId < 8; posId++) {
+            if (this.getDirectionByPosId(posId) === 'p' + d) {
+              return posId;
+            }
+          }
+          return d;
+        },
         getDirectionByPosId: function (posId) {
           var mapping = {
             0: {
@@ -1101,12 +1270,14 @@
           }
           return mapping[this.posId][posId];
         },
-        updatePosStatus: function (posId, state, name) {
+        updatePosStatus: function (posId, state, name, isBot) {
           var direct = this.getDirectionByPosId(posId);
           this.posState[direct].state = state;
           if (name) {
             this.posState[direct].name = name;
           }
+          // 人机模式：机器人座位带角标；座位清空时复位角标
+          this.posState[direct].isBot = state > 0 ? !!isBot : false;
           this.posState[direct].isDizhu = false;
           this.startTimer(false);
 
@@ -1126,6 +1297,7 @@
           this.where = 1;
           this.posId = '';
           this.deskId = '';
+          this.hostPosId = -1;
           this.posState.p3.state = 0;
           this.roomState.state = 0;
           this.posState.p0.callScore = -1;
@@ -1182,9 +1354,37 @@
         passCards: function () {
           this.client.emit('PLAY_CARD', [])
         },
+        // 提示：自动选中刚好大过上家的一手牌（仅选中，不代替出牌）
+        hintCards: function () {
+          if (this.roomState.state !== 2) {
+            return;
+          }
+          if (this.roomState.ctxPos !== 'p3') {
+            return;
+          }
+          // 上家牌型为"自己"或已清空时视为自由首出
+          var ctx = this.roomState.ctxCard;
+          var topShape = ctx.ctxPos && ctx.ctxPos !== 'p3' ? parseShape(ctx.type, ctx.key, ctx.len) : null;
+          var hand = this.posState.p3.cards;
+          var hint = findHintCards(hand, topShape);
+          hand.forEach(function (card) {
+            card.selected = false;
+          });
+          if (!hint) {
+            layer.msg(topShape ? '没有能大过上家的牌，建议不出' : '没有可出的牌');
+            return;
+          }
+          hint.forEach(function (card) {
+            card.selected = true;
+          });
+        },
         autoPlayCards: function () {
           if (this.roomState.ctxPos === 'p3') {
-            var cards = this.roomState.ctxCard.ctxPos === 'p3' ? [this.posState.p3.cards[0]] : [];
+            // 桌面无牌（自己领出，含重连后新一圈领出）时只能出牌，不能过牌；
+            // 有桌面牌且不是自己出的才能过牌
+            var leading = !this.roomState.ctxCard.ctxPos || this.roomState.ctxCard.ctxPos === 'p3';
+            var hand = this.posState.p3.cards;
+            var cards = leading && hand.length ? [hand[0]] : [];
             this.client.emit('PLAY_CARD', cards);
           }
         },
@@ -1195,6 +1395,34 @@
         cancelPrepare: function () {
           layer.load({ type: 3 });
           this.client.emit('CANCEL_PREPARE');
+        },
+        // 主持人开牌：全员已准备后由主持人触发开局（服务器校验主持权与准备状态）。
+        // 人未齐（有空位）时先弹窗确认是否将空位填充为机器人（人机模式/单人练习）
+        hostStartGame: function () {
+          var empty = 0;
+          for (var i = 0; i < 8; i++) {
+            if (this.posState[this.getDirectionByPosId(i)].state === 0) empty++;
+          }
+          if (empty > 0) {
+            this.botConfirm = { show: true, empty: empty };
+            return;
+          }
+          this.client.emit('HOST_START_GAME');
+        },
+        // 人机模式确认：填充机器人并开牌
+        confirmBotFill: function () {
+          this.botConfirm.show = false;
+          this.client.emit('HOST_START_GAME', { fillBots: true });
+        },
+        // 人机模式取消：继续等待真人
+        cancelBotFill: function () {
+          this.botConfirm.show = false;
+        },
+        // 该方位槽位是否坐着主持人：入参是屏幕方位序号（0-7，p3=自己），
+        // 需把主持人的绝对座位号映射到方位槽再比较，不能直接拿 hostPosId 比
+        isHostPos: function (dir) {
+          if (this.hostPosId === -1) return false;
+          return this.getDirectionByPosId(this.hostPosId) === 'p' + dir;
         },
         onDragstart:function(e){
           var img = new Image(); 
