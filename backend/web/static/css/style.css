@@ -220,6 +220,21 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 .position-image.has2 { background-image: url('/images/qq-ok.png'); background-repeat: no-repeat; background-position: center; background-size: contain; }
 .position-image.has:hover, .position-image.has2:hover { transform: none; border-color: rgba(255,255,255,.25); box-shadow: none; }
 
+/* 大厅座位通用模块：头像 + 序号作为一个整体（由 seat-avatar 组件渲染）
+   序号布局由本模块的 .is-seated 决定，不再依赖 .position-image 的兄弟选择器 */
+.seat-avatar { position: relative; width: 50px; height: 50px; }
+.seat-avatar .position-image { width: 100%; height: 100%; }
+.seat-avatar.is-seated .seat-badge {
+  top: auto;
+  bottom: 2px;
+  left: 2px;
+  width: auto;
+  height: auto;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
 .position-text {
   color: rgba(255, 255, 255, 0.85);
   overflow: hidden;
@@ -321,27 +336,94 @@ button:active { transform: translateY(0); filter: brightness(.95); }
     inset 0 -10px 24px rgba(0, 0, 0, 0.34);
 }
 
-/* 记分区 */
+/* 记分区：本方/对方两队比分 + 场上待收分（横条，置于桌面上方中线） */
 .feng-system {
   position: fixed;
   bottom: 50%;
   left: 50%;
   z-index: 999;
   transform: translateX(-50%);
-  color: #fff;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
+  min-width: 300px;
+  max-width: 440px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(14, 34, 25, 0.9), rgba(7, 19, 14, 0.94));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(6px);
-  min-width: 320px;
 }
-.feng-system p {
-  padding: 9px 22px;
-  margin: 0;
-  font-size: 14px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+.score-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 9px;
 }
-.feng-system p + p { border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.score-row + .score-row { margin-top: 4px; }
+/* 领先队伍：金色描边 + 微光底 */
+.score-row.score-lead {
+  background: rgba(240, 192, 90, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(240, 192, 90, 0.4);
+}
+.score-tag {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+  padding: 0 8px;
+  border-radius: 6px;
+  letter-spacing: 1px;
+}
+.score-tag-mine {
+  color: #0c2c1c;
+  background: linear-gradient(180deg, #7ee7a8, #2fae6e);
+}
+.score-tag-foe {
+  color: #3a1206;
+  background: linear-gradient(180deg, #ffb27e, #e2703a);
+}
+.score-names {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.score-num {
+  flex: none;
+  min-width: 48px;
+  text-align: right;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+.score-row.score-lead .score-num { color: var(--gold); }
+/* 场上待收分：底部独立一行，有分时点亮 */
+.score-pot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.16);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+}
+.score-pot-num {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+}
+.score-pot-live .score-pot-num {
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(240, 192, 90, 0.55);
+}
 
 /* 系统按钮组 */
 .btn-system {
@@ -462,23 +544,27 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 }
 .card-group-p3 .card { cursor: pointer; }
 
-.card-group-p0 { top: calc(78px + var(--room-pad)); left: calc(78px + var(--room-pad)); }
-.card-group-p1 { top: 50%; left: calc(78px + var(--room-pad)); margin-top: -60px; }
-.card-group-p2 { bottom: calc(78px + var(--room-pad)); left: calc(78px + var(--room-pad)); }
-.card-group-p4 { bottom: calc(78px + var(--room-pad)); right: calc(78px + var(--room-pad)); }
-.card-group-p5 { top: 50%; right: calc(78px + var(--room-pad)); margin-top: -60px; }
-.card-group-p6 { top: calc(78px + var(--room-pad)); right: calc(78px + var(--room-pad)); }
+/* 牌列跟随座位：上排 3 个在头像正下方（1/4、2/4、3/4 宽度），
+   左右两侧在头像内侧、1/3 与 2/3 高度（与头像中线的 22px 重叠为原有构图） */
+.card-group-p0 { top: calc(78px + var(--room-pad)); left: 25%; transform: translateX(-50%); }
+.card-group-p1 { top: 33.333%; left: calc(78px + var(--room-pad)); margin-top: -60px; }
+.card-group-p2 { top: 66.666%; left: calc(78px + var(--room-pad)); margin-top: -60px; }
+.card-group-p4 { top: 66.666%; right: calc(78px + var(--room-pad)); margin-top: -60px; }
+.card-group-p5 { top: 33.333%; right: calc(78px + var(--room-pad)); margin-top: -60px; }
+.card-group-p6 { top: calc(78px + var(--room-pad)); left: 75%; transform: translateX(-50%); }
 .card-group-p7 { top: calc(78px + var(--room-pad)); left: 50%; transform: translateX(-50%); }
 
 .card-ctx { position: absolute; height: 120px; }
 .card-ctx .card { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
 .card-ctx-p3 { bottom: calc(278px + var(--room-pad)); left: 50%; z-index: 999; transform: translateX(-50%); }
-.card-ctx-p0 { top: calc(198px + var(--room-pad)); left: calc(278px + var(--room-pad)); }
-.card-ctx-p1 { top: 50%; left: calc(278px + var(--room-pad)); margin-top: -60px; }
-.card-ctx-p2 { bottom: calc(198px + var(--room-pad)); left: calc(278px + var(--room-pad)); }
-.card-ctx-p4 { bottom: calc(198px + var(--room-pad)); right: calc(278px + var(--room-pad)); }
-.card-ctx-p5 { top: 50%; margin-top: -60px; right: calc(278px + var(--room-pad)); }
-.card-ctx-p6 { top: calc(198px + var(--room-pad)); right: calc(278px + var(--room-pad)); }
+/* 出牌区"朝桌心"放置：上排在各自牌列下方，左右两侧内移到 278px 基准线、
+   与座位同高度（1/3、2/3） */
+.card-ctx-p0 { top: calc(198px + var(--room-pad)); left: 25%; transform: translateX(-50%); }
+.card-ctx-p1 { top: 33.333%; left: calc(278px + var(--room-pad)); margin-top: -60px; }
+.card-ctx-p2 { top: 66.666%; left: calc(278px + var(--room-pad)); margin-top: -60px; }
+.card-ctx-p4 { top: 66.666%; right: calc(278px + var(--room-pad)); margin-top: -60px; }
+.card-ctx-p5 { top: 33.333%; right: calc(278px + var(--room-pad)); margin-top: -60px; }
+.card-ctx-p6 { top: calc(198px + var(--room-pad)); left: 75%; transform: translateX(-50%); }
 .card-ctx-p7 { top: calc(198px + var(--room-pad)); left: 50%; z-index: 999; transform: translateX(-50%); }
 
 /* 牌面精灵定位（保持原始坐标，勿动） */
@@ -593,15 +679,17 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   color: rgb(120, 255, 120);
 }
 
-/* 内缩到绒布边缘以内（--room-pad = 桌沿 + 间距），桌沿加厚时自动跟着走 */
-.player-wrapper.player-p0 { left: var(--room-pad); top: var(--room-pad); }
-.player-wrapper.player-p1 { left: var(--room-pad); top: 50%; margin-top: -50px; }
-.player-wrapper.player-p2 { left: var(--room-pad); bottom: var(--room-pad); }
-.player-wrapper.player-p4 { right: var(--room-pad); bottom: var(--room-pad); }
-.player-wrapper.player-p5 { right: var(--room-pad); top: 50%; margin-top: -50px; }
-.player-wrapper.player-p6 { right: var(--room-pad); top: var(--room-pad); }
-.player-wrapper.player-p7 { right: 50%; margin-right: -50px; top: var(--room-pad); }
+/* 座位环（出牌顺序 p3→p4→p5→p6→p7→p0→p1→p2 绕桌一圈）：
+   下中=自己 p3；左右两侧各 2 个座位在 1/3、2/3 高度；上排 3 个在 1/4、2/4、3/4 宽度。
+   内缩到绒布边缘以内（--room-pad = 桌沿 + 间距），桌沿加厚时自动跟着走 */
 .player-wrapper.player-p3 { bottom: var(--room-pad); left: 50%; margin-left: -50px; }
+.player-wrapper.player-p4 { right: var(--room-pad); top: 66.666%; margin-top: -50px; }
+.player-wrapper.player-p5 { right: var(--room-pad); top: 33.333%; margin-top: -50px; }
+.player-wrapper.player-p6 { top: var(--room-pad); left: 75%; margin-left: -50px; }
+.player-wrapper.player-p7 { top: var(--room-pad); left: 50%; margin-left: -50px; }
+.player-wrapper.player-p0 { top: var(--room-pad); left: 25%; margin-left: -50px; }
+.player-wrapper.player-p1 { left: var(--room-pad); top: 33.333%; margin-top: -50px; }
+.player-wrapper.player-p2 { left: var(--room-pad); top: 66.666%; margin-top: -50px; }
 
 /* 当前行动玩家高亮 */
 .player-wrapper.active-turn .player-name {
@@ -671,7 +759,12 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 .his-escape { color: #999; }
 .history-meta { color: #666; font-size: 12px; margin: 0 0 8px; }
 
-/* ---------------- 座位阵营编号 A1-A4 / B1-B4（半透明内嵌） ---------------- */
+/* ---------------- 座位阵营编号 A1-A4 / B1-B4 ----------------
+   阵营配色集中在这里：--seat-badge-color（字色）/ --seat-badge-glow（光晕）
+   任何使用 .seat-badge-a / .seat-badge-b 的模块都会跟随；单点改色即全局生效 */
+.seat-badge-a { --seat-badge-color: #8cbbff; --seat-badge-glow: rgba(80, 150, 255, 0.9); }
+.seat-badge-b { --seat-badge-color: #ffa396; --seat-badge-glow: rgba(255, 100, 90, 0.9); }
+
 .seat-badge {
   position: absolute;
   top: 0;
@@ -681,36 +774,23 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 800;
   letter-spacing: 1px;
   pointer-events: none;
-  color: rgba(255, 255, 255, 0.38);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-.seat-badge-a { color: rgba(140, 185, 255, 0.45); }
-.seat-badge-b { color: rgba(255, 160, 150, 0.45); }
-
-/* 有人入座时同样内嵌、稍微收敛 */
-.position-image.has ~ .seat-badge,
-.position-image.has2 ~ .seat-badge {
-  font-size: 12px;
-  top: auto;
-  bottom: 2px;
-  left: 2px;
-  width: auto;
-  height: auto;
-  letter-spacing: 0;
+  color: var(--seat-badge-color, rgba(255, 255, 255, 0.75));
+  text-shadow: 0 0 6px var(--seat-badge-glow, transparent), 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
-/* 房间头像上的编号：同样半透明内嵌 */
+/* 有人入座时的序号收敛样式已并入上面的 .seat-avatar 模块 */
+
+/* 房间头像上的编号：无底色，纯阵营色文字，对齐线在头像底部往上 1/8 处 */
 .player-photo { position: relative; }
 .seat-badge-avatar {
   width: 100%;
-  height: 64px;
-  top: 0;
+  height: auto;
+  top: auto;
+  bottom: 12.5%;
   left: 0;
-  font-size: 15px;
-  background: rgba(0, 0, 0, 0.12);
-  border-radius: 4px;
+  font-size: 18px;
 }

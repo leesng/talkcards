@@ -36,8 +36,7 @@
       <div class="lobby-container">
       <div v-for="desk in desks" class="desk">
         <div v-for="position in desk.positions" class="position" :class="{has:position.state,position0:position.posId === 0,position1:position.posId === 1,position2:position.posId === 2,position3:position.posId === 3,position4:position.posId === 4,position5:position.posId === 5,position6:position.posId === 6,position7:position.posId === 7}">
-          <span class="position-image" :class="{has:position.state===1,has2:position.state===2}" @click="sitDown(desk.deskId,position)"></span>
-          <span class="seat-badge" :class="seatLabel(position.posId).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(position.posId)}}</span>
+          <seat-avatar :label="seatLabel(position.posId)" :team="seatTeam(position.posId)" :state="position.state" @sit="sitDown(desk.deskId, position)"></seat-avatar>
           <span class="position-text">{{position.userName}}</span>
         </div>
         <div class="position-center">{{desk.deskId}}</div>
@@ -73,53 +72,64 @@
         <button v-if="posState.p3.state === 2 && (roomState.state === 0 || roomState.state === 3)" @click="cancelPrepare" class="btn-prepare">取消准备</button>
       </div>
 
-      <!-- 记分区 -->
-      <div class="feng-system">
-        <p v-if="posState.p3.state >= 2">{{posState.p0.name}}、{{posState.p2.name}}、{{posState.p4.name}}、{{posState.p6.name}}总得分：{{posState.p0.sumFeng+posState.p2.sumFeng+posState.p4.sumFeng+posState.p6.sumFeng}}</p>
-        <p v-if="posState.p3.state >= 2">{{posState.p1.name}}、{{posState.p3.name}}、{{posState.p5.name}}、{{posState.p7.name}}总得分：{{posState.p1.sumFeng+posState.p3.sumFeng+posState.p5.sumFeng+posState.p7.sumFeng}}</p>
-        <p v-if="posState.p3.state >= 2">本轮分数：{{roomState.tmpFeng}}</p>
+      <!-- 记分区：本方 / 对方总得分 + 场上待收分（本方 = 自己所在队，p1/p3/p5/p7 锚位） -->
+      <div class="feng-system" v-if="posState.p3.state >= 2">
+        <div class="score-row" :class="{'score-lead': myFeng > opFeng}">
+          <span class="score-tag score-tag-mine">本方</span>
+          <span class="score-names">{{posState.p1.name}}、{{posState.p3.name}}、{{posState.p5.name}}、{{posState.p7.name}}</span>
+          <span class="score-num">{{myFeng}}</span>
+        </div>
+        <div class="score-row" :class="{'score-lead': opFeng > myFeng}">
+          <span class="score-tag score-tag-foe">对方</span>
+          <span class="score-names">{{posState.p0.name}}、{{posState.p2.name}}、{{posState.p4.name}}、{{posState.p6.name}}</span>
+          <span class="score-num">{{opFeng}}</span>
+        </div>
+        <div class="score-pot" :class="{'score-pot-live': roomState.tmpFeng > 0}">
+          <span>场上待收分</span>
+          <span class="score-pot-num">{{roomState.tmpFeng}}</span>
+        </div>
       </div>
 
       <!-- 玩家头像 -->
       <div class="players">
         <div class="screen-center">
           <div class="player-wrapper player-p0" :class="{'active-turn':roomState.ctxPos === 'p0' && roomState.state === 2}" v-if="posState.p0.state">
-            <div class="player-photo" :class="{'player-photo-king':posState.p0.isDizhu}"><span class="seat-badge seat-badge-avatar" :class="seatLabel(0).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(0)}}</span></div>
+            <player-avatar :label="seatLabel(0)" :team="seatTeam(0)" :is-dizhu="posState.p0.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p0.name}}</div>
             <div class="text-center player-status" v-if="posState.p0.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p1" :class="{'active-turn':roomState.ctxPos === 'p1' && roomState.state === 2}" v-if="posState.p1.state">
-            <div class="player-photo" :class="{'player-photo-king':posState.p1.isDizhu}"><span class="seat-badge seat-badge-avatar" :class="seatLabel(1).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(1)}}</span></div>
+            <player-avatar :label="seatLabel(1)" :team="seatTeam(1)" :is-dizhu="posState.p1.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p1.name}}</div>
             <div class="text-center player-status" v-if="posState.p1.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p2" :class="{'active-turn':roomState.ctxPos === 'p2' && roomState.state === 2}" v-if="posState.p2.state">
-            <div class="player-photo" :class="{'player-photo-king':posState.p2.isDizhu}"><span class="seat-badge seat-badge-avatar" :class="seatLabel(2).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(2)}}</span></div>
+            <player-avatar :label="seatLabel(2)" :team="seatTeam(2)" :is-dizhu="posState.p2.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p2.name}}</div>
             <div class="text-center player-status" v-if="posState.p2.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p4" :class="{'active-turn':roomState.ctxPos === 'p4' && roomState.state === 2}" v-if="posState.p4.state">
-            <div class="player-photo" :class="{'player-photo-king':posState.p4.isDizhu}"><span class="seat-badge seat-badge-avatar" :class="seatLabel(4).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(4)}}</span></div>
+            <player-avatar :label="seatLabel(4)" :team="seatTeam(4)" :is-dizhu="posState.p4.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p4.name}}</div>
             <div class="text-center player-status" v-if="posState.p4.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p5" :class="{'active-turn':roomState.ctxPos === 'p5' && roomState.state === 2}" v-if="posState.p5.state">
-            <div class="player-photo" :class="{'player-photo-king':posState.p5.isDizhu}"><span class="seat-badge seat-badge-avatar" :class="seatLabel(5).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(5)}}</span></div>
+            <player-avatar :label="seatLabel(5)" :team="seatTeam(5)" :is-dizhu="posState.p5.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p5.name}}</div>
             <div class="text-center player-status" v-if="posState.p5.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p6" :class="{'active-turn':roomState.ctxPos === 'p6' && roomState.state === 2}" v-if="posState.p6.state">
-            <div class="player-photo" :class="{'player-photo-king':posState.p6.isDizhu}"><span class="seat-badge seat-badge-avatar" :class="seatLabel(6).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(6)}}</span></div>
+            <player-avatar :label="seatLabel(6)" :team="seatTeam(6)" :is-dizhu="posState.p6.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p6.name}}</div>
             <div class="text-center player-status" v-if="posState.p6.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p7" :class="{'active-turn':roomState.ctxPos === 'p7' && roomState.state === 2}" v-if="posState.p7.state">
-            <div class="player-photo" :class="{'player-photo-king':posState.p7.isDizhu}"><span class="seat-badge seat-badge-avatar" :class="seatLabel(7).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(7)}}</span></div>
+            <player-avatar :label="seatLabel(7)" :team="seatTeam(7)" :is-dizhu="posState.p7.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p7.name}}</div>
             <div class="text-center player-status" v-if="posState.p7.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
           <div class="player-wrapper player-p3" :class="{'active-turn':roomState.ctxPos === 'p3' && roomState.state === 2}" v-if="posState.p3.state">
-            <div class="player-photo" :class="{'player-photo-king':posState.p3.isDizhu}"><span class="seat-badge seat-badge-avatar" :class="seatLabel(3).charAt(0) === 'A' ? 'seat-badge-a' : 'seat-badge-b'">{{seatLabel(3)}}</span></div>
+            <player-avatar :label="seatLabel(3)" :team="seatTeam(3)" :is-dizhu="posState.p3.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p3.name}}</div>
             <div class="text-center player-status" v-if="posState.p3.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
           </div>
@@ -314,6 +324,77 @@
       return socket;
     }
 
+    // 通用模块：大厅座位 = 头像 + 序号一体（空位序号居中，已入座序号收至左下角）。
+    // props：
+    //   label  序号文本（seatLabel(posId)）
+    //   team   配色主题 'a'|'b'（seatTeam(posId)）
+    //   state  座位状态 0=空闲 1=已入座未准备 2=已入座已准备
+    // 事件：@sit 空位被点击（父层据此发起入座）
+    Vue.component('seat-avatar', {
+      props: {
+        label: { type: String, default: '' },
+        team: { type: String, default: 'a' },
+        state: { type: Number, default: 0 }
+      },
+      computed: {
+        rootClass: function () {
+          return 'seat-avatar' + (this.state > 0 ? ' is-seated' : '');
+        },
+        imgClass: function () {
+          return { has: this.state === 1, has2: this.state === 2 };
+        },
+        badgeClass: function () {
+          return 'seat-badge ' + (this.team === 'b' ? 'seat-badge-b' : 'seat-badge-a');
+        }
+      },
+      methods: {
+        onClick: function () {
+          if (this.state === 0) {
+            this.$emit('sit');
+          }
+        }
+      },
+      template: '<div :class="rootClass">' +
+        '<span class="position-image" :class="imgClass" @click="onClick"></span>' +
+        '<span :class="badgeClass">{{ label }}</span>' +
+        '</div>'
+    });
+
+    // 通用模块：头像 + 序号徽标（A1~A4 / B1~B4）作为一个整体。
+    // props：
+    //   label    序号文本（如 "A1"、"B3"），由 seatLabel(posId) 给出
+    //   team     配色主题 'a'|'b'，对应 CSS .seat-badge-a/.seat-badge-b 的阵营色变量
+    //   color    可选，直接覆盖序号颜色（不传则用主题色）
+    //   glow     可选，覆盖序号光晕颜色（默认跟随 color/主题色）
+    //   isDizhu  是否地主（换头像皮肤）
+    // 想换配色/改序号规则：改 CSS 的 --seat-badge-color 或 seatLabel()，所有引用处同步生效。
+    Vue.component('player-avatar', {
+      props: {
+        label: { type: String, default: '' },
+        team: { type: String, default: 'a' },
+        color: { type: String, default: '' },
+        glow: { type: String, default: '' },
+        isDizhu: { type: Boolean, default: false }
+      },
+      computed: {
+        badgeClass: function () {
+          return 'seat-badge seat-badge-avatar ' + (this.team === 'b' ? 'seat-badge-b' : 'seat-badge-a');
+        },
+        badgeStyle: function () {
+          if (!this.color) {
+            return {};
+          }
+          return {
+            color: this.color,
+            textShadow: '0 0 6px ' + (this.glow || this.color) + ', 0 1px 3px rgba(0, 0, 0, 0.6)'
+          };
+        }
+      },
+      template: '<div class="player-photo" :class="{\'player-photo-king\': isDizhu}">' +
+        '<span :class="badgeClass" :style="badgeStyle">{{ label }}</span>' +
+        '</div>'
+    });
+
     var vm = new Vue({
       el: "#app",
       data: function () {
@@ -439,6 +520,16 @@
               sumFeng:0,
             },
           }
+        }
+      },
+      computed: {
+        // 本方（自己队 = p1/p3/p5/p7 锚位，即奇数座位）总得分
+        myFeng: function () {
+          return this.posState.p1.sumFeng + this.posState.p3.sumFeng + this.posState.p5.sumFeng + this.posState.p7.sumFeng;
+        },
+        // 对方（偶数座位）总得分
+        opFeng: function () {
+          return this.posState.p0.sumFeng + this.posState.p2.sumFeng + this.posState.p4.sumFeng + this.posState.p6.sumFeng;
         }
       },
       mounted: function () {
@@ -920,6 +1011,10 @@
         // 座位阵营编号：偶数队 A1-A4，奇数队 B1-B4
         seatLabel: function (posId) {
           return posId % 2 === 0 ? 'A' + (posId / 2 + 1) : 'B' + ((posId + 1) / 2);
+        },
+        // 序号配色主题：偶数队 a，奇数队 b（对应 CSS .seat-badge-a/.seat-badge-b）
+        seatTeam: function (posId) {
+          return posId % 2 === 0 ? 'a' : 'b';
         },
         getDirectionByPosId: function (posId) {
           var mapping = {
