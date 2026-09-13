@@ -25,6 +25,9 @@ type Seat struct {
 	State    int    `json:"state"` // 0没人 1未准备 2已准备
 	UserName string `json:"userName"`
 	IsBot    bool   `json:"isBot"` // 人机模式填充的机器人座位（主持人开牌时填充，终局清理）
+	// Trustee 托管中（真人座位，托管期间由服务器按机器人策略代打）：
+	// 对局中玩家手动开启/关闭，或断线超时自动开启；重连/终局时清除。
+	Trustee bool `json:"trustee,omitempty"`
 }
 
 // Hold 游戏中断线玩家的保留记录。
@@ -241,9 +244,9 @@ func (d *Desk) TransferHostFrom(posID int) (int, bool) {
 	return -1, true
 }
 
-// GameInProgress 对局进行中（叫分/出牌均算）
+// GameInProgress 对局进行中（出牌阶段）
 func (d *Desk) GameInProgress() bool {
-	return d.Game != nil && (d.Game.Phase() == game.PhaseCall || d.Game.Phase() == game.PhasePlaying)
+	return d.Game != nil && d.Game.Phase() == game.PhasePlaying
 }
 
 // PlayerSnapshot 当前已入座玩家的名字快照（开局落库用；此后中途座位变动不影响本局记录）
@@ -263,6 +266,14 @@ func (d *Desk) ResetGame() {
 	d.StartedAt = time.Time{}
 	d.LastPlay = nil
 	d.LastValidPlay = nil
+}
+
+// ClearTrustees 清除全部托管标记（终局/终止时调用）；托管者座位保持原样
+// （真人仍在座、状态复位为未准备由调用方负责），只是不再代打。
+func (d *Desk) ClearTrustees() {
+	for i := range d.Positions {
+		d.Positions[i].Trustee = false
+	}
 }
 
 // Hold 查某用户的保留记录

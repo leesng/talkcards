@@ -53,11 +53,14 @@ func TestInitCardsConservation(t *testing.T) {
 	if fortyOne != 4 {
 		t.Fatalf("41 张的人数 %d != 4", fortyOne)
 	}
-	if g.Phase() != PhaseCall || g.Turn() < 0 || g.Turn() > 7 {
+	if g.Phase() != PhasePlaying || g.Turn() < 0 || g.Turn() > 7 {
 		t.Fatalf("start 后状态异常: phase=%v turn=%d", g.Phase(), g.Turn())
 	}
-	if g.CalledScores()[g.Turn()] != 3 {
-		t.Fatalf("先手应默认叫 3 分")
+	if g.TrickPos() != g.Turn() {
+		t.Fatalf("开局先手即为桌面有效牌归属: trickPos=%d turn=%d", g.TrickPos(), g.Turn())
+	}
+	if g.DizhuPosID() != g.Turn() {
+		t.Fatalf("首出者应为先手: lider=%d turn=%d", g.DizhuPosID(), g.Turn())
 	}
 }
 
@@ -111,8 +114,8 @@ func TestWhoFirst(t *testing.T) {
 	if g3.Turn() != 0 {
 		t.Fatalf("并列时 rnd(3)=0 应取 0 号，实际 %d", g3.Turn())
 	}
-	if g3.seats[0].Called != 3 {
-		t.Fatalf("先手 Called 应为 3")
+	if g3.leader != 0 {
+		t.Fatalf("并列时 rnd(3)=0 应取 0 号为先手，实际 %d", g3.leader)
 	}
 }
 
@@ -224,26 +227,6 @@ func TestValidateCheat(t *testing.T) {
 func TestScoreOf(t *testing.T) {
 	if got := scoreOf(cards(5, 0, 10, 1, 13, 2, 3, 3)); got != 25 {
 		t.Fatalf("scoreOf = %d, want 25", got)
-	}
-}
-
-// 叫分状态迁移：有人叫分 → 进入出牌；无人叫分 → 重发
-func TestCallScore(t *testing.T) {
-	g := newTestGame()
-	g.phase = PhaseCall
-	g.turn = 2
-	g.seats[2].Called = 3
-	g.CallScore(2)
-	if g.Phase() != PhasePlaying || g.Turn() != 2 || g.TrickPos() != 2 {
-		t.Fatalf("应进入出牌状态且首出者开牌: phase=%v turn=%d trickPos=%d", g.Phase(), g.Turn(), g.TrickPos())
-	}
-
-	g2 := newTestGame()
-	g2.phase = PhaseCall
-	g2.turn = 2
-	g2.CallScore(2)
-	if g2.Phase() != PhaseRedeal {
-		t.Fatalf("无人叫分应重发，实际 %v", g2.Phase())
 	}
 }
 

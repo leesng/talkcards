@@ -14,42 +14,6 @@ import (
 	"talkcards/backend/internal/wssrv"
 )
 
-func (h *Hub) onCallScore(s wssrv.Conn, data callScoreReq) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	c, d := h.clientInRoom(s)
-	if c == nil || d == nil || d.Game == nil {
-		return
-	}
-	h.applyCallScore(d, c.posID)
-}
-
-// applyCallScore 叫分应用与广播（真人与机器人共用）。
-// 载荷 score 与 js 一致不被采用，故真人/机器人统一走同一入口。
-func (h *Hub) applyCallScore(d *table.Desk, posID int) {
-	g := d.Game
-	g.CallScore(posID)
-	switch g.Phase() {
-	case game.PhaseCall:
-		h.broadCastRoom(EvCtxUserChange, d.DeskID, ctxUserChange{
-			CtxPos:       g.Turn(),
-			CtxScore:     g.CtxScore(),
-			CalledScores: calledScoresMap(g.CalledScores()),
-			Timeout:      playTiming,
-		}, nil)
-	case game.PhasePlaying:
-		dizhu := g.DizhuPosID()
-		h.broadCastRoom(EvShowTopCard, d.DeskID, showTopCard{TopCards: g.TopCards(), DizhuPosID: dizhu, Timeout: playTiming}, nil)
-		h.broadCastRoom(EvCtxPlayChange, d.DeskID, leadFrame(dizhu), nil)
-	case game.PhaseRedeal:
-		h.broadCastRoom(EvMessage, d.DeskID, msgPayload{Msg: "没有玩家叫分，重新发牌"}, nil)
-		h.startGame(d.DeskID)
-		h.broadCastRoom(EvUserMessageOut, d.DeskID, userMessage{Type: "SYS", PosID: posID, Msg: "本局游戏无人叫分，重新发牌", ID: h.nextID(), Time: now()}, nil)
-	}
-	h.scheduleBotIfTurn(d)
-}
-
 func (h *Hub) onPlayCard(s wssrv.Conn, data []card.Card) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -59,6 +23,12 @@ func (h *Hub) onPlayCard(s wssrv.Conn, data []card.Card) {
 		return
 	}
 	g := d.Game
+
+	// 托管中由系统代打，手动出牌拒绝（避免与代打竞态越序毒化对局）
+	if seat := d.Seat(c.posID); seat != nil && seat.Trustee {
+		h.emit(c, EvMessage, msgPayload{Msg: "托管中，请先取消托管再手动操作"})
+		return
+	}
 
 	// 校验+应用一步完成；越序的合法牌会毒化对局（bug-for-bug：帧照播、双事件齐发）
 	res := g.Play(c.posID, data)
@@ -97,6 +67,7 @@ func (h *Hub) applyPlayResult(d *table.Desk, posID int, origin *Session, cards [
 			for pos := 0; pos < table.SeatCount; pos++ {
 				d.UpdatePos(pos, 1, nil)
 			}
+			h.clearTrustees(d)
 			h.clearBotSeats(d)
 			d.ResetGame()
 			h.clearDeskPending(d)
@@ -115,6 +86,17 @@ func (h *Hub) applyPlayResult(d *table.Desk, posID int, origin *Session, cards [
 			"phase", g.Phase(), "turn", g.Turn())
 	}
 	h.scheduleBotIfTurn(d)
+}
+
+// clearTrustees 终局/终止时清除托管标记并广播（托管者仍在座，仅恢复手动语义；
+// 对局已结束，前端按 GAME_OVER/FORCE_EXIT 复位界面）
+func (h *Hub) clearTrustees(d *table.Desk) {
+	for pos := 0; pos < table.SeatCount; pos++ {
+		if seat := d.Seat(pos); seat != nil && seat.Trustee {
+			seat.Trustee = false
+			h.broadcastTrustee(d, pos)
+		}
+	}
 }
 
 // clearBotSeats 终局清理机器人座位：复位为空座并广播（真人座位不受影响）
@@ -147,20 +129,20 @@ func (h *Hub) scheduleBotIfTurn(d *table.Desk) {
 	h.botTimers[deskID] = time.AfterFunc(delay, func() { h.botAct(deskID) })
 }
 
-// botTurn 当前轮到者是否机器人座位（叫分/出牌阶段才有意义）
+// botTurn 当前轮到者是否由系统代打（机器人座位或托管中的真人座位；出牌阶段才有意义）
 func (h *Hub) botTurn(d *table.Desk) bool {
 	if d.Game == nil {
 		return false
 	}
 	g := d.Game
-	if g.Phase() != game.PhaseCall && g.Phase() != game.PhasePlaying {
+	if g.Phase() != game.PhasePlaying {
 		return false
 	}
 	seat := d.Seat(g.Turn())
-	return seat != nil && seat.IsBot
+	return seat != nil && (seat.IsBot || seat.Trustee)
 }
 
-// botAct 机器人行动：持锁重验桌/阶段/轮到者后按策略叫分或出牌。
+// botAct 机器人行动：持锁重验桌/阶段/轮到者后按策略出牌。
 // 回调由 time.AfterFunc 触发，需自行持锁。
 func (h *Hub) botAct(deskID int) {
 	h.mu.Lock()
@@ -174,39 +156,33 @@ func (h *Hub) botAct(deskID int) {
 	g := d.Game
 	pos := g.Turn()
 
-	switch g.Phase() {
-	case game.PhaseCall:
-		h.logger.Debug("机器人叫分", "desk", d.DeskID, "pos", pos)
-		h.applyCallScore(d, pos) // 机器人恒叫 3，与 e2e 审计机器人一致
-	case game.PhasePlaying:
-		var hand []card.Card
-		for _, hs := range g.Hands() {
-			if hs.PosID == pos {
-				hand = hs.Cards
-				break
-			}
+	var hand []card.Card
+	for _, hs := range g.Hands() {
+		if hs.PosID == pos {
+			hand = hs.Cards
+			break
 		}
-		var play []card.Card
-		lead := false
-		if top, ok := g.TrickTop(); ok {
-			// 智能跟牌：不吃队友大牌、炸弹按桌面分掷骰（细节见 bot.FollowSmart）
-			play = bot.FollowSmart(bot.FollowCtx{
-				Hand:          hand,
-				Top:           top,
-				TopIsTeammate: g.TrickPos()%2 == pos%2,
-				Pot:           g.TmpFeng(),
-			}) // 跟不住/掷骰未中返回 nil → 过牌
-		} else {
-			play = bot.Lead(hand)
-			lead = true
-		}
-		if play == nil {
-			play = []card.Card{}
-		}
-		h.logger.Debug("机器人出牌", "desk", d.DeskID, "pos", pos, "cards", len(play), "lead", lead)
-		res := g.Play(pos, play)
-		h.applyPlayResult(d, pos, nil, play, res)
 	}
+	var play []card.Card
+	lead := false
+	if top, ok := g.TrickTop(); ok {
+		// 智能跟牌：不吃队友大牌、炸弹按桌面分掷骰（细节见 bot.FollowSmart）
+		play = bot.FollowSmart(bot.FollowCtx{
+			Hand:          hand,
+			Top:           top,
+			TopIsTeammate: g.TrickPos()%2 == pos%2,
+			Pot:           g.TmpFeng(),
+		}) // 跟不住/掷骰未中返回 nil → 过牌
+	} else {
+		play = bot.Lead(hand)
+		lead = true
+	}
+	if play == nil {
+		play = []card.Card{}
+	}
+	h.logger.Debug("机器人出牌", "desk", d.DeskID, "pos", pos, "cards", len(play), "lead", lead)
+	res := g.Play(pos, play)
+	h.applyPlayResult(d, pos, nil, play, res)
 }
 
 // resumeClient 重连坐回：恢复 session 归属并按阶段重放快照（游戏进行中才重放游戏帧）
@@ -224,6 +200,12 @@ func (h *Hub) resumeClient(c *Session, d *table.Desk) {
 
 	c.deskID, c.posID = d.DeskID, hold.PosID
 	h.emit(c, EvReconnect, reconnectPayload{DeskID: d.DeskID, PosID: hold.PosID, PosInfo: d.Positions, HostPosID: d.HostPosID})
+	// 断线超时期间可能已被自动托管：重连即恢复手动（在途代打定时器会在
+	// botAct 持锁重验 botTurn 时发现托管已取消而自行放弃）
+	if seat := d.Seat(hold.PosID); seat != nil && seat.Trustee && d.GameInProgress() {
+		seat.Trustee = false
+		h.broadcastTrustee(d, hold.PosID)
+	}
 	h.broadCastRoom(EvUserMessageOut, d.DeskID, userMessage{Type: "SYS", PosID: hold.PosID, Msg: "玩家[" + name + "]重新连接", ID: h.nextID(), Time: now()}, c.conn)
 	h.logger.Info("玩家重连回到座位", "user", name, "desk", d.DeskID, "pos", hold.PosID)
 
@@ -232,14 +214,6 @@ func (h *Hub) resumeClient(c *Session, d *table.Desk) {
 		return
 	}
 	switch g.Phase() {
-	case game.PhaseCall:
-		h.emit(c, EvGameStart, newGameStart(g))
-		h.emit(c, EvCtxUserChange, ctxUserChange{
-			CtxPos:       g.Turn(),
-			CtxScore:     g.CtxScore(),
-			CalledScores: calledScoresMap(g.CalledScores()),
-			Timeout:      playTiming,
-		})
 	case game.PhasePlaying:
 		h.emit(c, EvGameStart, newGameStart(g))
 		h.emit(c, EvShowTopCard, showTopCard{TopCards: g.TopCards(), DizhuPosID: g.DizhuPosID(), Timeout: playTiming})
@@ -277,7 +251,10 @@ func (h *Hub) holdSeatForReconnect(d *table.Desk, userName string, posID int) {
 	h.timers[userName] = time.AfterFunc(h.reconnectWait, func() { h.onReconnectTimeout(userName) })
 }
 
-// onReconnectTimeout 重连时限已过：该玩家仍未回来，判逃跑终止（若对局已结束则仅清座位）
+// onReconnectTimeout 重连时限已过：该玩家仍未回来。
+// 对局进行中则转为自动托管继续打（出牌规则与机器人一致，保留座位可随时重连接管）；
+// 若此时已无任何真实玩家在线（全部断线超时），对局无从继续，直接按逃跑终止并落库。
+// 对局不在进行中（间隙掉线等）则仅释放座位。
 func (h *Hub) onReconnectTimeout(userName string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -287,18 +264,33 @@ func (h *Hub) onReconnectTimeout(userName string) {
 		return
 	}
 	hold, _ := d.Hold(userName)
-	d.RemoveHold(userName)
-	delete(h.timers, userName)
+	delete(h.timers, userName) // 倒计时已到，保留记录留待重连接管或终局清理
+
+	if !d.GameInProgress() {
+		// 原路径：对局不在进行中，超时仅释放座位（不终止对局）
+		d.RemoveHold(userName)
+		h.releaseSeat(d, hold.PosID, nil)
+		return
+	}
 
 	deskID, posID := d.DeskID, hold.PosID
-	h.logger.Warn("玩家重连超时，按逃跑处理", "user", userName, "desk", deskID, "pos", posID)
-
-	// 座位释放（等价 exitRoom 的座位/广播部分；desk.state 怪癖已修正为 0）
-	h.releaseSeat(d, posID, nil)
-
-	if d.GameInProgress() {
-		h.terminateGame(d, posID, userName)
+	if h.anyRealPlayerOnline(d) {
+		// 还有别的真人在打：断线者转托管，对局继续
+		if seat := d.Seat(posID); seat != nil && !seat.IsBot && !seat.Trustee {
+			seat.Trustee = true
+			h.broadcastTrustee(d, posID)
+		}
+		h.broadCastRoom(EvUserMessageOut, deskID, userMessage{Type: "SYS", PosID: posID, Msg: "玩家[" + userName + "]断线超时，系统自动托管", ID: h.nextID(), Time: now()}, nil)
+		h.logger.Warn("玩家重连超时，转为自动托管", "user", userName, "desk", deskID, "pos", posID)
+		h.scheduleBotIfTurn(d) // 恰轮到托管者时立即安排代打
+		return
 	}
+
+	// 全部真实玩家均已断线超时：无人可继续对局，直接中止（判逃跑）
+	h.logger.Warn("全部真实玩家断线超时，对局直接中止", "desk", deskID, "timeoutUser", userName)
+	d.RemoveHold(userName)
+	h.releaseSeat(d, posID, nil)
+	h.terminateGame(d, posID, userName)
 }
 
 // terminateGame 有人逃跑时终止对局：广播、重置、落库（endReason=escape）
@@ -314,6 +306,7 @@ func (h *Hub) terminateGame(d *table.Desk, escapePos int, escapee string) {
 	d.ResetGame()
 	h.clearDeskPending(d) // 对局已终止，清掉本桌所有掉线保留记录
 	h.clearBotSeats(d)    // 人机局终止同样清理机器人座位
+	h.clearTrustees(d)    // 托管者座位同样恢复手动语义
 	h.logger.Warn("对局因玩家逃跑终止", "desk", d.DeskID, "user", escapee)
 }
 
@@ -367,7 +360,7 @@ func (h *Hub) recordGame(d *table.Desk, endReason string) {
 	h.enqueueSave(rec)
 }
 
-// startGame 全员准备完毕开局（或无人叫分后重发）
+// startGame 全员准备完毕开局
 func (h *Hub) startGame(deskID int) {
 	d := h.lobby.Desk(deskID)
 	if d == nil {
@@ -383,10 +376,9 @@ func (h *Hub) startGame(deskID int) {
 	d.LastPlay = nil
 	d.Players = d.PlayerSnapshot()
 	h.broadCastRoom(EvGameStart, deskID, newGameStart(g), nil)
-	h.broadCastRoom(EvCtxUserChange, deskID, ctxUserChange{
-		CtxPos:   g.Turn(),
-		CtxScore: g.CtxScore(),
-		Timeout:  playTiming,
-	}, nil)
-	h.scheduleBotIfTurn(d) // 人机局：轮到机器人先叫分
+	// 开局即出牌阶段：直接广播首出者与轮转帧（无叫分流程）
+	dizhu := g.DizhuPosID()
+	h.broadCastRoom(EvShowTopCard, deskID, showTopCard{TopCards: g.TopCards(), DizhuPosID: dizhu, Timeout: playTiming}, nil)
+	h.broadCastRoom(EvCtxPlayChange, deskID, leadFrame(dizhu), nil)
+	h.scheduleBotIfTurn(d) // 人机局：轮到机器人先出牌
 }

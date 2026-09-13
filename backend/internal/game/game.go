@@ -15,10 +15,8 @@ type Phase int
 
 const (
 	PhaseIdle    Phase = 0
-	PhaseCall    Phase = 1 // 叫分
 	PhasePlaying Phase = 2 // 出牌
 	PhaseOver    Phase = 3 // 结束
-	PhaseRedeal  Phase = 4 // 需要重发
 	PhaseError   Phase = 5
 )
 
@@ -33,7 +31,6 @@ type HandSnapshot struct {
 type Seat struct {
 	PosID    int
 	Hand     []card.Card
-	Called   int // 叫分：-1 未叫，0-3（先手默认叫满 3）
 	Captured int // 抓分（只有出完者的抓分计入胜负线）
 }
 
@@ -58,6 +55,7 @@ type Game struct {
 	phase      Phase
 	ratio      int
 	turn       int // 轮到谁（contextPosID）；-1 未设置
+	leader     int // 首出者（本局先手），用于开局/重连的 SHOW_TOP_CARD
 	finalScore int // 终局胜方最终得分（全队出完时含带走对方未出手分牌）
 	winner     []int
 	loser      []int
@@ -76,22 +74,24 @@ func defaultRnd(n int) int { return rand.Intn(n) }
 // Init 重置对局（复用 Game 对象时调用）
 func (g *Game) Init() {
 	for i := range g.seats {
-		g.seats[i] = Seat{PosID: i, Called: -1}
+		g.seats[i] = Seat{PosID: i}
 	}
 	g.trick = Trick{Pos: -1}
 	g.phase = PhaseIdle
 	g.ratio = 1
 	g.turn = -1
+	g.leader = -1
 	g.finalScore = 0
 	g.winner = nil
 	g.loser = nil
 }
 
-// Start 发牌并确定先手，进入叫分阶段
+// Start 发牌并确定先手，直接进入出牌阶段（无叫分流程，先手即首出者）
 func (g *Game) Start() {
-	g.phase = PhaseCall
+	g.phase = PhasePlaying
 	g.deal()
 	g.whoFirst()
+	g.trick.Pos = g.turn
 }
 
 // deal 324 张随机发 8 家各 40 张，剩余 4 张按 last4 随机补给
@@ -122,7 +122,6 @@ func (g *Game) deal() {
 }
 
 // whoFirst 红桃 3 最多者先出；相同则比 3 的总数（不分花色）；仍相同随机定先手。
-// 先手自动叫满 3 分，直接获得首出权。
 func (g *Game) whoFirst() {
 	best := []int{0}
 	maxH3, maxT3 := -1, -1
@@ -144,7 +143,7 @@ func (g *Game) whoFirst() {
 		}
 	}
 	g.turn = best[g.rnd(len(best))]
-	g.seats[g.turn].Called = 3
+	g.leader = g.turn
 }
 
 // ---------- 规则链（共享上下文、责任链式校验） ----------
@@ -262,29 +261,11 @@ func (g *Game) validatePlay(pos int, cards []card.Card) *PlayContext {
 	return ctx
 }
 
-// CallScore 叫分推进。载荷 score 与旧实现一致不被采用；
-// 语义等同旧 Next(pos, nil)：出牌阶段的 CALL_SCORE 等同过牌（不可达路径，保留）。
-func (g *Game) CallScore(pos int) PlayResult {
-	return g.apply(pos, nil, PlayResult{Accepted: true})
-}
-
-// apply 应用一口（Next 语义）：越序先毒化；叫分阶段按最高叫分定首出；
-// 出牌阶段推进轮转/桌面/收分/接风/终局
+// apply 应用一口（Next 语义）：越序先毒化；出牌阶段推进轮转/桌面/收分/接风/终局
 func (g *Game) apply(pos int, cards []card.Card, res PlayResult) PlayResult {
 	if pos != g.turn {
 		// 一般不会进来：越序出牌毒化对局，客户端必须严格按 CTX_PLAY_CHANGE 出牌
 		g.phase = PhaseError
-		return res
-	}
-	if g.phase == PhaseCall {
-		if score, scorePos := g.maxScoreInfo(); score > 0 {
-			g.phase = PhasePlaying
-			g.turn = scorePos
-			g.trick.Pos = scorePos
-		} else {
-			// 需要重新发牌，找不到先出牌的人
-			g.phase = PhaseRedeal
-		}
 		return res
 	}
 	if g.phase == PhasePlaying {
@@ -435,18 +416,6 @@ func (g *Game) leftoverScore(team [4]int) int {
 	return s
 }
 
-// maxScoreInfo 当前最高叫分（whoFirst 已把先手置 3）
-func (g *Game) maxScoreInfo() (score, posID int) {
-	score, posID = 0, 0
-	for i := range g.seats {
-		if g.seats[i].Called > score {
-			score = g.seats[i].Called
-			posID = i
-		}
-	}
-	return
-}
-
 // ---------- 快照（hub 组装 wire 帧 / 重连重放 / 落库用） ----------
 
 func (g *Game) Phase() Phase  { return g.phase }
@@ -463,9 +432,6 @@ func (g *Game) TrickTop() (top card.Shape, ok bool) {
 	return g.trick.Top, true
 }
 
-// CtxScore 叫分上下文，恒 {1,2,3}（旧 contextScore 从未变更）
-func (g *Game) CtxScore() [3]int { return [3]int{1, 2, 3} }
-
 // posArray8 内部快照用数组承载（原 JS 数字键对象改为 wire 输出端重建 {"0":..} 形态）
 func posArray8(f func(i int) int) [8]int {
 	var a [8]int
@@ -473,11 +439,6 @@ func posArray8(f func(i int) int) [8]int {
 		a[i] = f(i)
 	}
 	return a
-}
-
-// CalledScores 各座位叫分快照
-func (g *Game) CalledScores() [8]int {
-	return posArray8(func(i int) int { return g.seats[i].Called })
 }
 
 // SumFeng 各座位累计抓分快照
@@ -502,11 +463,8 @@ func (g *Game) Hands() []HandSnapshot {
 // HandLen 某座位剩余手牌数（断线重连/落库）
 func (g *Game) HandLen(pos int) int { return len(g.seats[pos].Hand) }
 
-// DizhuPosID 首出者（最高叫分者）
-func (g *Game) DizhuPosID() int {
-	_, posID := g.maxScoreInfo()
-	return posID
-}
+// DizhuPosID 首出者（本局先手，开局确定后不变）
+func (g *Game) DizhuPosID() int { return g.leader }
 
 // TopCards 无底牌玩法，恒为空（wire 契约）
 func (g *Game) TopCards() []card.Card { return []card.Card{} }

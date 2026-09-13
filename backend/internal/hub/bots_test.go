@@ -144,8 +144,6 @@ func TestHumanWithBotsFullGame(t *testing.T) {
 		}
 
 		switch {
-		case phase == game.PhaseCall && turn == 3:
-			h.onCallScore(c0, callScoreReq{Score: 3})
 		case phase == game.PhasePlaying && turn == 3:
 			played := false
 			for i := 0; i < len(humanHand) && !played; i++ {

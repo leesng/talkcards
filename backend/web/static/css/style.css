@@ -464,13 +464,6 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   letter-spacing: 2px;
   margin: 0 8px;
 }
-.btn-group .btn-call {
-  background: linear-gradient(180deg, #ffd86b, #e6a823);
-  color: #5c3d00;
-  text-shadow: 0 1px 0 rgba(255,255,255,.35);
-}
-.btn-call + .btn-call { margin-left: 15px; }
-
 .score-tipe {
   color: #7bffb0;
   font-size: 30px;
@@ -509,15 +502,17 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 }
 .text-tips-left { left: 0; }
 .text-tips-right { right: 0; }
-/* 上排座位（p0/p6/p7）的 剩余/得分 信息面板：
-   - 牌列下方就是出牌区，原位置会被出的牌遮挡 → 移到头像右侧；
-   - 统一做成固定基准线的小卡片（半透明深色底 + 细边框），垂直中心对齐头像照片中线
-     （top 32px = 照片 64px 的中线），三家共用同一水平基线，不再随内容漂移；
-   - 数字用等宽数字（tabular-nums），三家之间的数值列纵向对齐；
-   - p0 右侧邻 p7 的头像，面板翻到头像左侧（内容仍左对齐，保证跨座位列对齐） */
+/* 座位「剩余/得分」信息面板（8 家共用一套外观）：
+   - 上排座位（p0/p6/p7）挂在头像侧边：牌列在头像下方、再下面是出牌区，原位置会被出的牌遮挡；
+   - 左右两侧座位（p1/p2/p4/p5）挂在头像下方（内侧被手牌列占满，见 .seat-hud-below）；
+   - 对齐规则：上排面板上下居中于头像（top 50% = 照片+昵称整块的中线），三家共用同一水平基线；
+     两侧面板左右居中于头像（left 50% + translateX(-50%)），与昵称同一条竖轴；
+   - 数字用等宽数字（tabular-nums），数值列纵向对齐；
+   - 上排三家（含最左的 p0）面板统一挂头像右侧，布局排列一致；p0 面板与 p7 头像
+     之间净空 = 屏宽/6 − 142px，>852px 宽的屏幕均无重叠 */
 .seat-hud {
   position: absolute;
-  top: 32px;
+  top: 50%;
   left: calc(100% + 12px);
   bottom: auto;
   transform: translateY(-50%);
@@ -532,7 +527,11 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.seat-hud-flip { left: auto; right: calc(100% + 12px); }
+.seat-hud-flip { left: auto; right: calc(100% + 12px); } /* 预留：面板翻到头像左侧（当前未使用，上排统一放右侧） */
+/* 左右两侧座位（p1/p2/p4/p5）复用同一块面板，只换挂点：
+   两侧头像的"旁边"就是手牌列（牌列垂直居中于头像，占满内侧），没有上排那种空位，
+   所以面板挂在头像正下方，并左右居中于头像（与昵称同一条竖轴）。 */
+.seat-hud-below { top: calc(100% + 6px); left: 50%; right: auto; transform: translateX(-50%); }
 .hud-row { display: flex; align-items: center; gap: 5px; line-height: 1.35; }
 .hud-row + .hud-row { margin-top: 4px; }
 .hud-label { flex: none; font-size: 11px; letter-spacing: 1px; color: rgba(255, 255, 255, 0.55); }
@@ -572,12 +571,16 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 .icon-group { position: absolute; top: -55px; }
 .icon-group-right { right: 10px; }
 .icon-group-left { left: 10px; }
-/* 上排三家的倒计时改为头像角标（挂在 player-wrapper 上）：
-   原先挂在牌列上会随牌数增减左右漂移、且悬在头像上方的留白里，
-   现在固定在照片左上/右上角、三家位置恒定一致 */
+/* 倒计时一律做成头像角标（挂在 player-wrapper 上），8 家统一：
+   原先左右两家挂在牌列上，会随牌数增减左右漂移、且悬在头像上方的留白里，
+   现在固定在照片外侧上角（左排 -22 在左、右排 -22 在右），位置恒定一致 */
 .icon-group.seat-clock { top: -22px; }
 .seat-clock-left { left: -22px; }
 .seat-clock-right { left: auto; right: -22px; }
+/* 两侧下位（p2/p4）角标改挂照片外下角：面板居中后外缘可达头像外侧，
+   上位面板与下位角标在两家之间的窄带里是唯一会撞的组合 —— 下位角标下移后彻底错开，
+   且整圈角标恰好关于桌面横轴镜像对称 */
+.icon-group.seat-clock-low { top: 40px; }
 .seat-clock .clock { width: 44px; height: 46px; line-height: 46px; font-size: 14px; }
 
 /* ---------------- 牌 ---------------- */
@@ -802,57 +805,46 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   font-weight: 800;
 }
 .over-team-win .over-final { color: #d4a017; }
-/* 成员行：昵称定宽列 + 抓分徽标列 + 未出完说明（右对齐），多行之间纵向对齐 */
+/* 成员行：抓分一列等宽数字右对齐，tabular-nums 保证纵向对齐工整 */
 .over-row {
   display: flex;
   align-items: center;
   line-height: 24px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .over-name {
-  flex: 0 0 7em;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .over-grab {
-  flex: 0 0 auto;
-  min-width: 68px;
-  text-align: center;
-  padding: 0 6px;
-  border-radius: 6px;
-  font-size: 12px;
+  flex: 0 0 56px;
+  text-align: right;
+  padding-right: 10px;
+  font-size: 13px;
   font-weight: 700;
-  background: rgba(0, 0, 0, 0.08);
   color: #666;
 }
-.over-grab-live {
-  background: rgba(240, 192, 90, 0.25);
-  color: #8a6508;
-}
-/* 未出完者：剩牌中的分牌按规则记入对方总分（靠右，与抓分列错开） */
+.over-grab-live { color: #8a6508; }
+/* 未出完者：剩牌张数与送出分（跟在名字后的小标签） */
 .over-leftover {
-  margin-left: auto;
-  padding-left: 8px;
-  font-size: 12px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: rgba(192, 57, 43, 0.1);
   color: #c0392b;
-  text-align: right;
 }
-/* 战绩分摊：等宽胶囊流式排布，自动换行不粘连 */
-.over-record {
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12px;
-  text-align: left;
+/* 标题下的本局分差汇总行（胜队最终得分，替代原人均 ± 分摊列） */
+.over-gap {
+  margin: 2px 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #666;
+  font-variant-numeric: tabular-nums;
 }
-.over-record-item {
-  padding: 1px 8px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.06);
-}
-.over-record-win { color: #1e8e5a; }
-.over-record-lose { color: #c0392b; }
 
 .msg-box {
   position: fixed;
@@ -1102,3 +1094,62 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 }
 .btn-ghost:hover { border-color: rgba(255, 255, 255, 0.45); }
 
+
+/* 托管徽标：托管中的真人座位（手动开启或断线超时自动托管） */
+.trustee-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffc37a, #f08c1e);
+  color: #4d2700;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 16px;
+  vertical-align: 1px;
+  text-shadow: none;
+}
+
+/* 托管按钮：开启后高亮提示"系统代打中" */
+.btn-trustee-on {
+  background: linear-gradient(180deg, #ffc37a, #f08c1e);
+  color: #4d2700;
+}
+
+/* 托管按钮固定在游戏界面右下角（沿对角线略往左上偏移） */
+.btn-trustee {
+  position: fixed;
+  right: 48px;
+  bottom: 48px;
+  z-index: 900;
+}
+
+/* 托管中座位标识：座位卡片叠加呼吸闪烁的"托管中"遮罩，告知其他玩家系统代打中 */
+.player-wrapper.trustee-on {
+  position: relative;
+}
+
+.player-wrapper.trustee-on::after {
+  content: '托管中';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 50;
+  padding: 4px 14px;
+  border-radius: 12px;
+  background: rgba(240, 140, 30, 0.85);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 20px;
+  text-shadow: none;
+  pointer-events: none;
+  animation: trustee-breathe 1.2s ease-in-out infinite;
+  box-shadow: 0 0 8px rgba(240, 140, 30, 0.6);
+}
+
+@keyframes trustee-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}

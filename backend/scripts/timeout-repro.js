@@ -45,8 +45,7 @@ const SKIP_TIMEOUT = process.env.SKIP_TIMEOUT === '1';
 
   // 复刻前端 ctxCard 语义：最后一手有效牌不是"我"才需要压牌
   let ctxPosMe = true, needBeat = () => !ctxPosMe;
-  let callTurn = false, playTurn = false, timedOutOnce = false;
-  s.on('CTX_USER_CHANGE', (d) => { callTurn = d.ctxPos === MY; });
+  let playTurn = false, timedOutOnce = false;
   s.on('CTX_PLAY_CHANGE', (d) => {
     playTurn = d.posId === MY;
     if (!d.isPass) ctxPosMe = d.ctxData.posId === MY;
@@ -64,12 +63,6 @@ const SKIP_TIMEOUT = process.env.SKIP_TIMEOUT === '1';
 
   const t0 = Date.now();
   while (!over && Date.now() - t0 < 300000) {
-    if (callTurn) {
-      s.emit('CALL_SCORE', { score: 3 });
-      callTurn = false;
-      await sleep(500);
-      continue;
-    }
     if (!playTurn) { await sleep(100); continue; }
     if (!timedOutOnce && !SKIP_TIMEOUT) {
       console.log('[wait ] 46s 模拟前端超时...');

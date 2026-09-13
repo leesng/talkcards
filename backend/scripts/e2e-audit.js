@@ -240,9 +240,6 @@ async function main() {
   });
 
   bots.forEach((b) => {
-    b.socket.on('CTX_USER_CHANGE', (d) => {
-      if (d.ctxPos === b.posId && d.calledScores === undefined) b.emit('CALL_SCORE', { score: 3 });
-    });
     b.socket.on('GAME_START', (d) => {
       b.takeCards(d.cards);
       if (!ledger.estHands) {

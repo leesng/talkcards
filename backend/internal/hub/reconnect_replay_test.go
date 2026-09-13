@@ -40,9 +40,8 @@ func TestReconnectReplaysStandingPlay(t *testing.T) {
 		t.Fatal("开局后对局应挂载到桌面")
 	}
 
-	// 叫分进入出牌阶段
+	// 开局即出牌阶段
 	leader := g.Turn()
-	h.onCallScore(conns[leader], callScoreReq{Score: 3})
 	waitFrame(t, conns[0], EvShowTopCard, 1)
 
 	// 首出者打一张单牌（有牌权时任意单张合法）
@@ -143,7 +142,6 @@ func TestTrickClearFlag(t *testing.T) {
 	d := h.lobby.Desk(1)
 	g := d.Game
 	leader := g.Turn()
-	h.onCallScore(conns[leader], callScoreReq{Score: 3})
 	waitFrame(t, conns[0], EvShowTopCard, 1)
 
 	var lead card.Card
@@ -248,9 +246,7 @@ func TestBotPlayFrameCarriesRealSeat(t *testing.T) {
 		h.mu.Lock()
 		phase, turn := d.Game.Phase(), d.Game.Turn()
 		h.mu.Unlock()
-		if phase == game.PhaseCall && turn == 3 {
-			h.onCallScore(c0, callScoreReq{Score: 3})
-		} else if phase == game.PhasePlaying && turn == 3 {
+		if phase == game.PhasePlaying && turn == 3 {
 			played := false
 			for i := 0; i < len(humanHand) && !played; i++ {
 				if trySingle(humanHand[i]) {

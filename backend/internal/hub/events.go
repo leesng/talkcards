@@ -17,11 +17,11 @@ const (
 	EvPrepare       = "PREPARE"
 	EvCancelPrepare = "CANCEL_PREPARE"
 	EvHostStartGame = "HOST_START_GAME" // 主持人开牌（全员已准备后由主持人触发开局）
-	EvCallScore     = "CALL_SCORE"
 	EvPlayCard      = "PLAY_CARD"
 	EvUserMessage   = "USER_MESSAGE"
 	EvHistoryList   = "HISTORY_LIST"
 	EvHistoryDetail = "HISTORY_DETAIL"
+	EvToggleTrustee = "TOGGLE_TRUSTEE" // 托管开关（仅对局中生效；出牌规则与机器人一致）
 )
 
 // 出站事件
@@ -45,7 +45,6 @@ const (
 	EvPrepareSuccess       = "PREPARE_SUCCESS"
 	EvCancelPrepareSuccess = "CANCEL_PREPARE_SUCCESS"
 	EvGameStart            = "GAME_START"
-	EvCtxUserChange        = "CTX_USER_CHANGE"
 	EvShowTopCard          = "SHOW_TOP_CARD"
 	EvCtxPlayChange        = "CTX_PLAY_CHANGE"
 	EvPlayCardOk           = "PLAY_CARD_SUCCESS"
@@ -53,7 +52,8 @@ const (
 	EvGameOver             = "GAME_OVER"
 	EvMessage              = "MESSAGE"
 	EvUserMessageOut       = "USER_MESSAGE"
-	EvHostChange           = "HOST_CHANGE" // 主持权变更（空桌首坐授予 / 主持人离桌顺延 / 全桌清空复位）
+	EvHostChange           = "HOST_CHANGE"    // 主持权变更（空桌首坐授予 / 主持人离桌顺延 / 全桌清空复位）
+	EvTrusteeChange        = "TRUSTEE_CHANGE" // 托管状态变更（手动开关 / 断线超时自动托管 / 重连取消托管）
 )
 
 // 座位/牌桌 wire 结构见 internal/table（Seat/Desk 直接序列化，字段与前端逐字一致）
@@ -106,10 +106,6 @@ type hostStartGameReq struct {
 	FillBots bool `json:"fillBots"`
 }
 
-type callScoreReq struct {
-	Score int `json:"score"`
-}
-
 type msgPayload struct {
 	Msg string `json:"msg"`
 }
@@ -134,6 +130,14 @@ type sitdownSuccess struct {
 	PosID     int          `json:"posId"`
 	PosInfo   []table.Seat `json:"posInfos"`
 	HostPosID int          `json:"hostPosId"` // 坐下后的主持人座位号（可能是自己）
+}
+
+// trusteeChange TRUSTEE_CHANGE：托管状态变更广播；trustee=true 表示该座位
+// 托管中（由服务器按机器人策略代打），false 表示已恢复手动
+type trusteeChange struct {
+	PosID    int    `json:"posId"`
+	Trustee  bool   `json:"trustee"`
+	UserName string `json:"userName,omitempty"` // 断线超时自动托管时附带，便于前端提示
 }
 
 // hostChange HOST_CHANGE：主持权授予/顺延/复位；posId=-1 表示本桌已无主持人
@@ -201,14 +205,6 @@ type gameOverPayload struct {
 	Loser  []int `json:"loser"`
 	Score  int   `json:"score"`
 	Ratio  int   `json:"ratio"`
-}
-
-// ctxUserChange CTX_USER_CHANGE；开局首次广播无 calledScores
-type ctxUserChange struct {
-	CtxPos       int            `json:"ctxPos"`
-	CtxScore     [3]int         `json:"ctxScore"`
-	CalledScores map[string]int `json:"calledScores,omitempty"`
-	Timeout      int            `json:"timeout"`
 }
 
 type showTopCard struct {

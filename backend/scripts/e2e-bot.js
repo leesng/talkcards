@@ -219,17 +219,13 @@ function attachDriver(bots, budget) {
   const finished = new Promise((res) => { settle = res; });
   const hardStop = setTimeout(() => {
     failure = failure || new Error('牌局超时');
-    for (const b of bots) console.error(`    [超时现场] ${b.name} posId=${b.posId} myTurn=${b.myTurn} busy=${b.busy} 手牌${b.hand.length}张 最后CTX帧:轮到座${b.lastCtx ? b.lastCtx.posId : '?'} 最后叫分帧:ctxPos=${b.lastUserCtx !== undefined ? b.lastUserCtx : '?'}`);
+    for (const b of bots) console.error(`    [超时现场] ${b.name} posId=${b.posId} myTurn=${b.myTurn} busy=${b.busy} 手牌${b.hand.length}张 最后CTX帧:轮到座${b.lastCtx ? b.lastCtx.posId : '?'}`);
     settle();
   }, 180000);
 
   const attach = (b) => {
     b.myTurn = false;
     b.busy = false;
-    const onUserChange = (d) => {
-      b.lastUserCtx = d.ctxPos;
-      if (d.ctxPos === b.posId && d.calledScores === undefined) b.emit('CALL_SCORE', { score: 3 });
-    };
     const onStart = (d) => { b.takeCards(d.cards, b.awaitReplayStart); b.awaitReplayStart = false; };
     // 出牌驱动：纯 WS 下背靠背多帧可能在同一 tick 派发，直接在回调里 takeTurn
     // 会重入。改为记录"是否轮到我"，同一时间只允许一个 takeTurn 在飞，结束后复查。
@@ -253,13 +249,12 @@ function attachDriver(bots, budget) {
       if (b.myTurn && !b.busy) playIfTurn();
     };
     const onOver = () => { clearTimeout(hardStop); settle(); };
-    b.socket.on('CTX_USER_CHANGE', onUserChange);
     b.socket.on('GAME_START', onStart);
     b.socket.on('CTX_PLAY_CHANGE', onCtx);
     b.socket.on('GAME_OVER', onOver);
     // 常驻驱动补吃 attach 前入 pending 的帧（断线重连：服务器重放帧可能先于
     // 重挂监听到达）。动态 on/off（tryPlay）依然绝不消费 pending——不变。
-    for (const [ev, fn] of [['CTX_USER_CHANGE', onUserChange], ['GAME_START', onStart], ['CTX_PLAY_CHANGE', onCtx]]) {
+    for (const [ev, fn] of [['GAME_START', onStart], ['CTX_PLAY_CHANGE', onCtx]]) {
       const buf = b.socket.pending.get(ev) || [];
       while (buf.length) fn(buf.shift());
     }
@@ -303,11 +298,6 @@ async function scenarioFullGame() {
 async function scenarioEscape() {
   console.log('场景 B：游戏中掉线超时判逃跑');
   const bots = await spawnBots('B');
-  bots.forEach((b) => {
-    b.socket.on('CTX_USER_CHANGE', (d) => {
-      if (d.ctxPos === b.posId && d.calledScores === undefined) b.emit('CALL_SCORE', { score: 3 });
-    });
-  });
   bots.forEach((b) => b.emit('PREPARE'));
   await Promise.all(bots.map((b) => b.wait('PREPARE_SUCCESS', 10000)));
   await hostStart(bots);

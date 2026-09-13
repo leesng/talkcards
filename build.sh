@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 构建单二进制后端（前端已嵌入），产物输出到仓库根 target/talkcards-{goos}-{goarch}。
-# 默认 linux/amd64 + linux/arm64；
+# 默认 linux/amd64 + linux/arm64 + windows/amd64（Windows 产物带 .exe 后缀）；
 # 用法：./build.sh [goos] [goarch]，如 ./build.sh linux arm64
 #       ./build.sh run [go run 额外参数...]  不构建二进制，直接 go run 起服务，
 #                           前端静态资源用磁盘上的 web/static（--static-dir），便于改前端即刷即用
@@ -74,7 +74,7 @@ targets=()
 if [[ $# -ge 2 ]]; then
   targets=("$1/$2")
 else
-  targets=(linux/amd64 linux/arm64)
+  targets=(linux/amd64 linux/arm64 windows/amd64)
 fi
 
 # 产物输出到仓库根 target/，按平台命名 talkcards-{goos}-{goarch}
@@ -84,7 +84,8 @@ for t in "${targets[@]}"; do
   goos="${t%/*}"
   goarch="${t#*/}"
   out="${TARGET_DIR}/talkcards-${goos}-${goarch}"
+  [[ "${goos}" == "windows" ]] && out="${out}.exe"
   CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
     go build -trimpath -ldflags "${LDFLAGS}" -o "${out}" ./cmd/server
-  echo "target/talkcards-${goos}-${goarch}  $(du -h "${out}" | cut -f1)  (${VERSION})"
+  echo "target/$(basename "${out}")  $(du -h "${out}" | cut -f1)  (${VERSION})"
 done

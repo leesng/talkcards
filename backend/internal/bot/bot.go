@@ -153,31 +153,28 @@ func isSmallTop(top card.Shape) bool {
 
 // bombChance 只剩炸弹时各炸弹的放行概率。
 func bombChance(b card.Shape, pot int) float64 {
-	if pot >= 50 {
-		return 1 // 分大于等于 50 必压过对手
+	if pot > 50 {
+		return 1 // 分大于 50 必压过对手
 	}
 	king := b.Kind == card.KindKingBomb
 	if pot == 0 {
-		// 桌面没分：≤4×8 三成，其余 4/5 张炸弹半成，超 5 张或王炸不出
+		// 桌面没分：≤4×8 两成，4 张大牌面或超 4 张（含王炸）半成
 		switch {
-		case king || b.Len > 5:
-			return 0
-		case b.Len == 4 && b.Rank <= 8:
-			return 0.30
-		default: // 4 张大牌面炸弹或 5 张炸弹
+		case king || b.Len > 4:
 			return 0.05
+		case b.Rank <= 8:
+			return 0.20
+		default:
+			return 0.10
 		}
 	}
-	// 桌面有分但 <50：4 张照出，5 张对半，6 张及以上（含王炸）两成
+	// 桌面有分且 ≤50：4 张八成，5 张四成，6 张及以上（含王炸）一成
 	switch {
 	case king || b.Len >= 6:
-		return 0.20
+		return 0.10
 	case b.Len == 5:
-		return 0.50
+		return 0.40
 	default:
-		return 1
+		return 0.80
 	}
 }
-
-// CallScore 叫分：恒叫 3（与 e2e 审计机器人一致，首轮叫 3 直接进入出牌阶段）
-func CallScore() int { return 3 }

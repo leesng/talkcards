@@ -1,5 +1,5 @@
 // wire_test.go 黄金帧测试：以假连接直驱 hub 各 handler，用结构体编解码锁定
-// CTX_USER_CHANGE / SHOW_TOP_CARD / CTX_PLAY_CHANGE（首出、出牌、过牌）、
+// SHOW_TOP_CARD / CTX_PLAY_CHANGE（首出、出牌、过牌）、
 // PLAY_CARD_SUCCESS、GAME_OVER 的 wire 形态，并驱动整局至终局验证落库。
 // 期望值一律构造同款结构体后 DeepEqual 对比，不做字符串手拼。
 package hub
@@ -186,16 +186,13 @@ func TestWireGoldenFrames(t *testing.T) {
 		}
 	}
 
-	// 开局 CTX_USER_CHANGE 黄金（calledScores 缺省）
-	uc := decodeFrame[ctxUserChange](t, waitFrame(t, conns[0], EvCtxUserChange, 1), EvCtxUserChange)
-	P := uc.CtxPos
-	if want := (ctxUserChange{CtxPos: P, CtxScore: [3]int{1, 2, 3}, Timeout: playTiming}); !reflect.DeepEqual(uc, want) {
-		t.Fatalf("CTX_USER_CHANGE = %+v, 期望 %+v", uc, want)
+	// 开局直接进入出牌阶段：SHOW_TOP_CARD 黄金（含首出者）
+	stc := decodeFrame[showTopCard](t, waitFrame(t, conns[0], EvShowTopCard, 1), EvShowTopCard)
+	P := stc.DizhuPosID
+	if want := (showTopCard{TopCards: []card.Card{}, DizhuPosID: P, Timeout: playTiming}); !reflect.DeepEqual(stc, want) {
+		t.Fatalf("SHOW_TOP_CARD = %+v, 期望 %+v", stc, want)
 	}
-
-	// 先手叫分 → SHOW_TOP_CARD 黄金 + 初牌 CTX_PLAY_CHANGE 黄金
-	h.onCallScore(conns[P], callScoreReq{Score: 3})
-	expectFrame(t, conns[0], EvShowTopCard, 1, showTopCard{TopCards: []card.Card{}, DizhuPosID: P, Timeout: playTiming})
+	// 首出引导帧黄金
 	expectFrame(t, conns[0], EvCtxPlayChange, 1, ctxPlayChange{
 		CtxData: ctxPlayCtx{Len: 0, Key: "", Type: "", Cards: []card.Card{}, PosID: P},
 		SumFeng: zeroPosMap(), PosID: P, Timeout: playTiming,
@@ -549,7 +546,7 @@ func TestHostFillBots(t *testing.T) {
 		}
 		if g := d.Game; g != nil {
 			act.phase = g.Phase()
-			act.mine = (act.phase == game.PhaseCall || act.phase == game.PhasePlaying) && g.Turn() == 3
+			act.mine = act.phase == game.PhasePlaying && g.Turn() == 3
 			if act.mine && act.phase == game.PhasePlaying {
 				var hand []card.Card
 				for _, hs := range g.Hands() {
@@ -568,9 +565,7 @@ func TestHostFillBots(t *testing.T) {
 		h.mu.Unlock()
 
 		// 只在轮到真人时代打（否则会越序毒化对局）；过牌也要发送 nil
-		if act.mine && act.phase == game.PhaseCall {
-			h.onCallScore(c0, callScoreReq{Score: bot.CallScore()})
-		} else if act.mine && act.phase == game.PhasePlaying {
+		if act.mine && act.phase == game.PhasePlaying {
 			h.onPlayCard(c0, act.play)
 		} else {
 			time.Sleep(2 * time.Millisecond)

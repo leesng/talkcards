@@ -43,12 +43,7 @@ func zeroPosMap() map[string]int {
 	return posKeyMap(table.PlaySnapshot{}.SumFeng)
 }
 
-// calledScoresMap 叫分快照 wire 形态
-func calledScoresMap(a [table.SeatCount]int) map[string]int {
-	return posKeyMap(a)
-}
-
-// leadFrame 叫分完成后的引导帧/首出前掉线的补发轮转帧：
+// leadFrame 开局首出引导帧/首出前掉线的补发轮转帧：
 // 无压牌（key/type 为空串）、轮转到首出者
 func leadFrame(p int) ctxPlayChange {
 	return ctxPlayChange{

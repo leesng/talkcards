@@ -93,7 +93,6 @@ func New(st *store.Store, reconnectWait time.Duration, logger *slog.Logger) *Hub
 func (h *Hub) Register(srv *wssrv.Server) {
 	on(srv, EvLogin, h.logger, h.onLogin)
 	on(srv, EvSitdown, h.logger, h.onSitdown)
-	on(srv, EvCallScore, h.logger, h.onCallScore)
 	on(srv, EvPlayCard, h.logger, h.onPlayCard)
 	on(srv, EvUserMessage, h.logger, h.onUserMessage)
 	on(srv, EvHistoryList, h.logger, h.onHistoryList)
@@ -103,6 +102,7 @@ func (h *Hub) Register(srv *wssrv.Server) {
 	noData(srv, EvPrepare, h.onPrepare)
 	noData(srv, EvCancelPrepare, h.onCancelPrepare)
 	on(srv, EvHostStartGame, h.logger, h.onHostStartGame) // 载荷可缺省（fillBots）
+	noData(srv, EvToggleTrustee, h.onToggleTrustee)       // 托管开关（仅对局中生效）
 	srv.OnDisconnect(h.onDisconnect)
 }
 
@@ -366,6 +366,63 @@ func (h *Hub) onHostStartGame(s wssrv.Conn, data hostStartGameReq) {
 	}
 	h.logger.Info("主持人开牌", "user", c.UserName(), "desk", c.deskID, "pos", c.posID)
 	h.startGame(c.deskID)
+}
+
+// onToggleTrustee 托管开关：仅对局进行中（出牌阶段）可切换；机器人座位不可托管。
+// 开启后该座位由服务器按机器人策略代打（出牌规则与机器人完全一致），
+// 关闭后恢复手动；托管期间手动出牌会被拒绝。
+func (h *Hub) onToggleTrustee(s wssrv.Conn) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	c, d := h.clientInRoom(s)
+	if c == nil || d == nil {
+		return
+	}
+	if !d.GameInProgress() {
+		h.emit(c, EvMessage, msgPayload{Msg: "只有对局进行中才能托管"})
+		return
+	}
+	seat := d.Seat(c.posID)
+	if seat == nil || seat.State == 0 || seat.IsBot {
+		return
+	}
+	seat.Trustee = !seat.Trustee
+	on := seat.Trustee
+	h.logger.Info("玩家切换托管", "user", c.UserName(), "desk", c.deskID, "pos", c.posID, "trustee", on)
+	h.broadcastTrustee(d, c.posID)
+	msg := "玩家[" + c.UserName() + "]关闭托管，恢复手动操作"
+	if on {
+		msg = "玩家[" + c.UserName() + "]开启托管，由系统代打"
+	}
+	h.broadCastRoom(EvUserMessageOut, d.DeskID, userMessage{Type: "SYS", PosID: c.posID, Msg: msg, ID: h.nextID(), Time: now()}, nil)
+	if on {
+		h.scheduleBotIfTurn(d) // 开启即轮到自己时立即安排代打
+	}
+}
+
+// broadcastTrustee 广播某座位的托管状态变更
+func (h *Hub) broadcastTrustee(d *table.Desk, posID int) {
+	seat := d.Seat(posID)
+	h.broadCastRoom(EvTrusteeChange, d.DeskID, trusteeChange{PosID: posID, Trustee: seat.Trustee}, nil)
+}
+
+// anyRealPlayerOnline 本桌是否还有在线的真人（未断线保留、非机器人）。
+// 断线超时托管后若无任何真人在线，对局无从继续，直接按逃跑终止。
+func (h *Hub) anyRealPlayerOnline(d *table.Desk) bool {
+	for i := range d.Positions {
+		s := &d.Positions[i]
+		if s.State == 0 || s.IsBot {
+			continue
+		}
+		if _, held := d.Hold(s.UserName); held {
+			continue // 断线保留中（含已超时托管者）
+		}
+		if h.sessions.byName(s.UserName) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // onCancelPrepare 取消准备：仅已准备且对局未开始（叫分/出牌中不可取消）时生效
