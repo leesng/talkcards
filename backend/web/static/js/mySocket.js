@@ -2,21 +2,20 @@
   'use strict';
 
   function connect(url) {
-    var handlers = {};      // type -> 回调
-    var queue = [];         // 未连上时暂存的出站消息
+    var handlers = {};
+    var queue = [];
     var ws = null;
-    var closed = false;     // 主动 close 后不再重连
+    var closed = false;
     var retry = 0;
-    var lastLogin = null;   // 最近一次 LOGIN 载荷（用户名字符串），重连后自动重发
+    var lastLogin = null; // last LOGIN payload, re-sent after reconnect
     var that = {};
 
     function open() {
       ws = new WebSocket(url);
       ws.onopen = function () {
         retry = 0;
-        // 把连接建立前积压的消息按序发出
         while (queue.length) { ws.send(queue.shift()); }
-        // 服务器为无状态连接：断线即丢失会话，重连后自动重新登录
+        // The server connection is stateless: re-login automatically after reconnect.
         if (lastLogin) { that.emit('LOGIN', lastLogin); }
       };
       ws.onmessage = function (ev) {
@@ -29,11 +28,10 @@
       ws.onclose = function () {
         ws = null;
         if (closed) { return; }
-        // 指数退避重连
         var delay = Math.min(1000 * Math.pow(2, retry++), 10000);
         setTimeout(open, delay);
       };
-      ws.onerror = function () { /* onerror 后必触发 onclose，统一在其处理 */ };
+      ws.onerror = function () { /* onclose always fires after onerror; handled there */ };
     }
 
     that.on = function (type, fn) {

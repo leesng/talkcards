@@ -1,4 +1,4 @@
-// talkcards 沟通牌 Go 后端（单二进制，前端静态资源已嵌入）。
+// talkcards backend (single binary, frontend assets embedded).
 package main
 
 import (
@@ -27,7 +27,7 @@ import (
 
 var version = "dev"
 
-// envOr 环境变量缺省值兜底：CLI 显式参数 > 环境变量 > 内置默认
+// envOr falls back to an env var, then a built-in default.
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -66,7 +66,7 @@ func main() {
 	e.HideBanner = true
 	e.HidePort = true
 
-	// 战绩持久化（恒开；登录仅以用户名为唯一身份，无需落库）
+	// Game persistence is always on; login is name-only, nothing to persist there.
 	st, err := store.Open(*dbPath)
 	if err != nil {
 		logger.Error("打开数据库失败", "path", *dbPath, "err", err)
@@ -78,12 +78,13 @@ func main() {
 	gameServer := hub.New(st, time.Duration(*reconnectTimeout)*time.Second, logger)
 	gameServer.SetBotDelay(time.Duration(*botDelayMinMs)*time.Millisecond, time.Duration(*botDelayMaxMs)*time.Millisecond)
 	gameServer.Register(wsServer)
-	defer gameServer.Flush() // 等待异步落库排空（LIFO：先于 st.Close 执行）
+	defer gameServer.Flush() // drain the async persist queue before st.Close (defers run LIFO)
 	e.GET("/ws", echo.WrapHandler(wsServer))
 
 	var staticFS fs.FS
 	if *staticDir != "" {
-		// 磁盘静态资源目录（开发用，免重新构建二进制即可改前端）
+		// Dev mode: serve static files from disk so the frontend can be edited
+		// without rebuilding the binary.
 		staticFS = os.DirFS(*staticDir)
 		if _, err := fs.Stat(staticFS, "index.html"); err != nil {
 			logger.Error("静态资源目录缺少 index.html", "dir", *staticDir)
@@ -97,7 +98,8 @@ func main() {
 	}
 	e.StaticFS("/", staticFS)
 
-	// 收到中断信号后优雅关闭：停收新连接、等待在途请求，随后 main 正常返回走 defer
+	// Graceful shutdown on SIGINT/SIGTERM: stop accepting, drain in-flight
+	// requests, then return normally so defers (persist flush, db close) run.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -113,7 +115,7 @@ func main() {
 	addr := net.JoinHostPort(*host, *port)
 	logger.Info("服务启动", "version", version, "addr", addr, "db", *dbPath)
 
-	// 打印可点击访问地址：本机回环 + 所有非回环 IPv4（局域网 IP，方便他人直连）
+	// Log clickable URLs: loopback plus every non-loopback IPv4 (LAN address).
 	printAccessURLs(logger, *host, *port)
 	if err := e.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("服务异常退出", "err", err)
@@ -121,8 +123,8 @@ func main() {
 	}
 }
 
-// printAccessURLs 启动时打印可直接点击访问的地址：
-// host 非空时只打印该地址；否则打印回环地址 + 所有非回环 IPv4（局域网 IP）。
+// printAccessURLs logs clickable access URLs: only the given host when set,
+// otherwise loopback plus all non-loopback IPv4 addresses.
 func printAccessURLs(logger *slog.Logger, host, port string) {
 	if host != "" {
 		logger.Info(fmt.Sprintf("访问地址: http://%s", net.JoinHostPort(host, port)))

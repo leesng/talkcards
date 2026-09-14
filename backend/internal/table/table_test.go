@@ -10,7 +10,7 @@ import (
 
 func TestQuickJoinPicksFullestDesk(t *testing.T) {
 	l := New()
-	// 1 号桌 1 人（pos0），2 号桌 2 人（pos0,pos1）
+	// desk 1 has one player (pos0), desk 2 has two (pos0,pos1)
 	l.Desk(1).UpdatePos(0, 1, ptr("a"))
 	l.Desk(2).UpdatePos(0, 1, ptr("a"))
 	l.Desk(2).UpdatePos(1, 1, ptr("b"))
@@ -20,7 +20,7 @@ func TestQuickJoinPicksFullestDesk(t *testing.T) {
 		t.Fatalf("应挑 2 号桌 pos2，实际 desk=%d pos=%d ok=%v", deskID, posID, ok)
 	}
 
-	// 2 号桌坐满后应回落 1 号桌
+	// once desk 2 is full, fall back to desk 1
 	for i := 2; i < SeatCount; i++ {
 		l.Desk(2).UpdatePos(i, 1, ptr("x"))
 	}
@@ -29,7 +29,7 @@ func TestQuickJoinPicksFullestDesk(t *testing.T) {
 		t.Fatalf("满员后应挑 1 号桌，实际 desk=%d ok=%v", deskID, ok)
 	}
 
-	// 所有桌全部坐满则失败
+	// all desks full → fail
 	for _, dk := range l.Desks {
 		for i := 0; i < SeatCount; i++ {
 			if dk.IsEmpty(i) {
@@ -44,16 +44,17 @@ func TestQuickJoinPicksFullestDesk(t *testing.T) {
 
 func TestPrepareLifecycle(t *testing.T) {
 	d := New().Desk(1)
-	// 空桌：无人入座也视为"已入座者全准备"（人未齐由主持人决定是否填充机器人开局）
+	// empty desk counts as "all seated players prepared" (host decides whether
+	// to fill bots and start short-handed)
 	if !d.AllPrepared() {
 		t.Fatalf("空桌应视为已入座者全准备")
 	}
-	// 有人入座但未准备 → 不满足
+	// someone seated but not ready → not prepared
 	d.UpdatePos(0, 1, ptr("u0"))
 	if d.AllPrepared() {
 		t.Fatalf("有人未准备不应通过")
 	}
-	// 已入座者全准备即可（空座位不阻塞）
+	// every seated player ready is enough (empty seats don't block)
 	d.UpdatePos(0, 2, nil)
 	if !d.AllPrepared() {
 		t.Fatalf("已入座者全准备应通过（空座不阻塞）")
@@ -72,7 +73,7 @@ func TestPrepareLifecycle(t *testing.T) {
 
 func TestFillBotsAndClearBots(t *testing.T) {
 	d := New().Desk(1)
-	d.UpdatePos(3, 2, ptr("host")) // 真人已准备
+	d.UpdatePos(3, 2, ptr("host")) // a ready human
 	if got := len(d.EmptySeats()); got != 7 {
 		t.Fatalf("应剩 7 个空位，实际 %d", got)
 	}
@@ -85,7 +86,7 @@ func TestFillBotsAndClearBots(t *testing.T) {
 		if !s.IsBot || s.State != 2 || s.UserName == "" {
 			t.Fatalf("座位 %d 应为已准备机器人", p)
 		}
-		// 名字格式："机" + 62 进制自增串（0-9a-zA-Z），不足 3 位补零占位
+		// name format: "机" + base-62 counter (0-9a-zA-Z), zero-padded to 3+ chars
 		if !strings.HasPrefix(s.UserName, "机") {
 			t.Fatalf("机器人名应以「机」开头，实际 %q", s.UserName)
 		}
@@ -102,7 +103,7 @@ func TestFillBotsAndClearBots(t *testing.T) {
 			}
 		}
 	}
-	// 同一次填充内名字互不相同
+	// names are unique within one fill
 	seen := map[string]bool{}
 	for _, p := range filled {
 		n := d.Seat(p).UserName
@@ -117,10 +118,10 @@ func TestFillBotsAndClearBots(t *testing.T) {
 	if len(d.EmptySeats()) != 0 || !d.AllPrepared() {
 		t.Fatalf("填充后应满员且全准备")
 	}
-	// 机器人不接任主持权
+	// bots never take over as host
 	d.HostPosID = 3
 	if p, changed := d.TransferHostFrom(3); !changed || p == filled[0] && d.Seat(p).IsBot {
-		// TransferHostFrom 会跳过机器人座；此处仅验证不落在机器人座
+		// TransferHostFrom skips bot seats; here we only verify it didn't land on a bot
 		for i := 0; i < SeatCount; i++ {
 			if s := d.Seat(i); s.IsBot && i == d.HostPosID {
 				t.Fatalf("主持人不应顺延给机器人，实际给了座位 %d", i)

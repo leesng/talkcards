@@ -1,5 +1,4 @@
-// translator.go wire 载荷翻译：领域状态（game/table）→ 事件载荷结构，
-// 以及快照重建（断线重连重放）。内部数组快照在此重建 JS 数字键对象形态。
+// translator.go: domain state → wire payloads; rebuilds JS numeric-key objects.
 package hub
 
 import (
@@ -8,14 +7,13 @@ import (
 	"talkcards/backend/internal/table"
 )
 
-// newGameStart 组装 GAME_START 载荷：领域手牌快照 → wire 分组（含红桃统计）
 func newGameStart(g *game.Game) gameStartPayload {
 	hands := g.Hands()
 	groups := make([]handGroup, len(hands))
 	for _, h := range hands {
 		ht := [15]int{}
 		for _, c := range h.Cards {
-			if c.Suit == card.Heart { // 大小王 type=0 也计入红桃统计
+			if c.Suit == card.Heart { // jokers (type=0) count toward the hearts tally too
 				ht[c.Face-3]++
 			}
 		}
@@ -24,12 +22,11 @@ func newGameStart(g *game.Game) gameStartPayload {
 	return gameStartPayload{Cards: groups}
 }
 
-// newGameOver 领域终局结果 → GAME_OVER wire 载荷
 func newGameOver(res game.Result) gameOverPayload {
 	return gameOverPayload{Winner: res.Winner, Loser: res.Loser, Score: res.Score, Ratio: res.Ratio}
 }
 
-// posKeyMap 重建 {"0":x,...,"7":x} 数字键对象（与 JS 键序一致）
+// posKeyMap: rebuild the {"0":x,...,"7":x} JS numeric-key object.
 func posKeyMap(a [table.SeatCount]int) map[string]int {
 	m := make(map[string]int, table.SeatCount)
 	for i, v := range a {
@@ -38,13 +35,12 @@ func posKeyMap(a [table.SeatCount]int) map[string]int {
 	return m
 }
 
-// zeroPosMap 全零抓分快照（开局/引导帧）
 func zeroPosMap() map[string]int {
 	return posKeyMap(table.PlaySnapshot{}.SumFeng)
 }
 
-// leadFrame 开局首出引导帧/首出前掉线的补发轮转帧：
-// 无压牌（key/type 为空串）、轮转到首出者；首出倒计时单独放宽
+// leadFrame: opening lead / turn frame for a pre-lead disconnect — nothing
+// to beat, turn to the leader, longer first-lead countdown.
 func leadFrame(p int) ctxPlayChange {
 	return ctxPlayChange{
 		CtxData: ctxPlayCtx{Len: 0, Key: "", Type: "", Cards: []card.Card{}, PosID: p},
@@ -52,11 +48,12 @@ func leadFrame(p int) ctxPlayChange {
 		TmpFeng: 0,
 		PosID:   p,
 		Timeout: firstPlayTiming,
-		Clear:   true, // 领出状态：桌面无牌可压，客户端应清空出牌区与"要压的牌型"
+		Clear:   true, // leading state: clients clear the play area and "shape to beat"
 	}
 }
 
-// playFrame 出牌受理后的广播帧与重连快照（g 须为已应用该手牌后的状态）
+// playFrame: broadcast frame + reconnect snapshot after an accepted play
+// (g is the post-application state).
 func playFrame(g *game.Game, posID int, cards []card.Card, res game.PlayResult) (ctxPlayChange, *table.PlaySnapshot) {
 	isPass := len(cards) == 0
 	snap := &table.PlaySnapshot{
@@ -71,7 +68,7 @@ func playFrame(g *game.Game, posID int, cards []card.Card, res game.PlayResult) 
 	if res.HasShape {
 		keyVal, typeVal = res.Shape.Rank, res.Shape.TypeName()
 		snap.Key, snap.Type = res.Shape.Rank, res.Shape.TypeName()
-	} // 过牌时与 js 一致：key/type 不出现在 payload 中
+	} // on a pass, key/type stay absent (js compat)
 	return ctxPlayChange{
 		CtxData: ctxPlayCtx{Len: len(cards), Key: keyVal, Type: typeVal, Cards: nonNil(cards), PosID: posID},
 		SumFeng: posKeyMap(snap.SumFeng),
@@ -82,7 +79,7 @@ func playFrame(g *game.Game, posID int, cards []card.Card, res game.PlayResult) 
 	}, snap
 }
 
-// replayFrame 由重连快照重建广播帧（刷新倒计时）
+// replayFrame: rebuild a frame from a reconnect snapshot.
 func replayFrame(snap *table.PlaySnapshot) ctxPlayChange {
 	var keyVal, typeVal interface{}
 	if !snap.IsPass {

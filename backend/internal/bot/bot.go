@@ -1,6 +1,5 @@
-// Package bot 人机模式机器人策略：与 e2e-audit.js 的 candidates() 及前端
-// parser.js 的提示（findHintCards）同源——按「孤张单 → 对 → 三 → 炸弹」整组取牌，
-// 不拆对/三；炸弹桶先按张数升序、同张数再按牌面升序。跟不住则过牌。
+// Package bot bot/trustee play strategy; kept in sync with e2e-audit.js
+// candidates() and the parser.js hints.
 package bot
 
 import (
@@ -10,8 +9,8 @@ import (
 	"talkcards/backend/internal/card"
 )
 
-// Candidates 手牌候选组：每个牌值按现有张数整体归组（1=孤张单 2=对 3=三，
-// ≥4 张或 3 张以上同王=炸弹），返回按组序排列的候选，每项为该组全部牌。
+// Candidates groups each face by its current count (1=single 2=pair 3=triple,
+// ≥4 cards or ≥3 same joker = bomb) and returns candidates in group order.
 func Candidates(hand []card.Card) [][]card.Card {
 	byFace := make(map[card.Face][]card.Card)
 	for _, c := range hand {
@@ -23,19 +22,19 @@ func Candidates(hand []card.Card) [][]card.Card {
 	}
 	sort.Slice(faces, func(i, j int) bool { return faces[i] < faces[j] })
 
-	buckets := [4][][]card.Card{} // 单/对/三/炸弹
+	buckets := [4][][]card.Card{} // single/pair/triple/bomb
 	for _, f := range faces {
 		cs := byFace[f]
 		gi := len(cs) - 1
 		if f.IsJoker() && len(cs) >= 3 {
-			gi = 3 // 3 张以上同王按王炸处理，不当作三条
+			gi = 3 // ≥3 same joker counts as a king bomb, not a triple
 		}
 		if gi > 3 {
 			gi = 3
 		}
 		buckets[gi] = append(buckets[gi], cs)
 	}
-	// 炸弹组：先按张数升序（4炸<5炸<6炸…），同张数再按牌面升序
+	// Bombs: fewer cards first, then lower face.
 	sort.SliceStable(buckets[3], func(i, j int) bool {
 		if len(buckets[3][i]) != len(buckets[3][j]) {
 			return len(buckets[3][i]) < len(buckets[3][j])
@@ -50,14 +49,15 @@ func Candidates(hand []card.Card) [][]card.Card {
 	return out
 }
 
-// Lead 自由首出（一轮第一手）：≤8 的小牌（单/双/三不限型）按牌面升序最优先，
-// 先把小单/小对/小三混杂着清完；小牌出尽后再按组序（单→对→三→炸弹）整组出。
+// Lead free lead (first play of a trick): small cards (≤8, any of single/pair/
+// triple) go first by ascending face; once small cards are gone, play whole
+// groups in group order (single → pair → triple → bomb).
 func Lead(hand []card.Card) []card.Card {
 	cands := Candidates(hand)
 	best := -1
 	for i, cs := range cands {
 		if len(cs) > 3 {
-			break // 之后只剩炸弹组，不参与小牌优先
+			break // only bombs remain; they don't take part in small-card priority
 		}
 		if cs[0].Face <= smallTopRankMax && (best == -1 || cs[0].Face < cands[best][0].Face) {
 			best = i
@@ -72,7 +72,7 @@ func Lead(hand []card.Card) []card.Card {
 	return cands[0]
 }
 
-// Follow 跟牌：按组序找第一组整体解读后能压住 top 的；全组压不住返回 nil（过牌）
+// Follow plays the first whole group that beats top; nil means pass.
 func Follow(hand []card.Card, top card.Shape) []card.Card {
 	for _, cs := range Candidates(hand) {
 		for _, s := range card.Classify(cs) {
@@ -84,32 +84,33 @@ func Follow(hand []card.Card, top card.Shape) []card.Card {
 	return nil
 }
 
-// FollowCtx 智能跟牌上下文。
+// FollowCtx context for smart following.
 type FollowCtx struct {
 	Hand          []card.Card
-	Top           card.Shape     // 当前桌面有效牌型（被压目标）
-	TopIsTeammate bool           // 上一手出牌者是否队友（同奇偶座位）
-	Pot           int            // 桌面滚动分（TmpFeng）
-	Rand          func() float64 // [0,1) 随机源，nil 用 math/rand 全局（测试可注入）
+	Top           card.Shape     // current effective shape on the table
+	TopIsTeammate bool           // whether the last play came from a teammate (same-parity seats)
+	Pot           int            // rolling pot score (TmpFeng)
+	Rand          func() float64 // [0,1) source; nil uses math/rand global (injectable for tests)
 }
 
-// FollowSmart 智能跟牌（非首出时）：
-//  1. 队友的牌：除非是 ≤8 的单/双/三，一律不吃（只吃对手的牌）；
-//  2. 无整组常规牌能压时可拆 A/2/大小王的对子跟对手的单牌
-//     （拆一张单跟，另一张留手后续继续跟或组对）；
-//  3. 只有炸弹能大过且桌面无分：4 张 ≤8 两成、4 张大牌面一成、超 4 张（含王炸）半成放行；
-//  4. 桌面有分且 ≤50：4 张八成、5 张四成、6 张及以上（含王炸）一成；分 >50 必压。
+// FollowSmart smart follow (not leading):
+//  1. Never take teammate cards unless they are a ≤8 single/pair/triple;
+//  2. When no whole regular group beats an opponent's single, may split a
+//     pair of A/2/jokers and follow with one card (keep the other in hand);
+//  3. Only a bomb can beat and pot is empty: 4 cards ≤8 → 20%, 4 big-face →
+//     10%, >4 cards (incl. king bombs) → 5% chance to play it;
+//  4. Pot has score ≤50: 4 cards → 80%, 5 → 40%, ≥6 (incl. king bombs) → 10%;
+//     pot >50 always plays.
 //
-// 非炸弹的常规跟牌不受掷骰限制（能压就用最小的一组）；返回 nil 表示过牌。
-// 概率分档常量集中在 static.go。
+// Regular (non-bomb) follows are not gated by the dice roll; nil means pass.
+// Probability tiers live in static.go.
 func FollowSmart(ctx FollowCtx) []card.Card {
-	// 规则 1：不吃队友的大牌，只吃对手的牌
 	if ctx.TopIsTeammate && !isSmallTop(ctx.Top) {
 		return nil
 	}
 
-	// 候选按组序（单→对→三→炸弹，炸弹张数/牌面升序）扫描：
-	// 第一个能压的非炸弹 = 最小常规跟牌；第一个能压的炸弹 = 最小炸弹
+	// Scan candidates in group order: first beating non-bomb = smallest regular
+	// follow; first beating bomb = smallest bomb.
 	var normal, bomb []card.Card
 	var bombShape card.Shape
 	for _, cs := range Candidates(ctx.Hand) {
@@ -129,16 +130,13 @@ func FollowSmart(ctx FollowCtx) []card.Card {
 	if normal != nil {
 		return normal
 	}
-	// 规则补充：无整组常规牌能压对手的单牌时，允许拆 A/2/大小王的对子
-	// 出一张单跟（另一张留手后续继续跟或组对）
 	if sp := splitHighPair(ctx.Hand, ctx.Top); sp != nil {
 		return sp
 	}
 	if bomb == nil {
-		return nil // 跟不住 → 过牌
+		return nil
 	}
 
-	// 只剩炸弹能大过：按桌面分掷骰
 	rng := ctx.Rand
 	if rng == nil {
 		rng = rand.Float64
@@ -149,7 +147,8 @@ func FollowSmart(ctx FollowCtx) []card.Card {
 	return nil
 }
 
-// isSmallTop 队友出的牌是否为 ≤8 的单/双/三（小牌可以让队友吃走拿牌权）
+// isSmallTop reports whether a teammate's play is a ≤8 single/pair/triple
+// (small enough to let a teammate take it and gain the lead).
 func isSmallTop(top card.Shape) bool {
 	switch top.Kind {
 	case card.KindSingle, card.KindPair, card.KindTriple:
@@ -158,10 +157,10 @@ func isSmallTop(top card.Shape) bool {
 	return false
 }
 
-// splitHighPair 拆高牌对子跟单：恰 2 张的 A/2/大小王对子在手、
-// 桌面是对手的单牌且没有整组常规牌能压时，从对子拆出一张单跟，
-// 牌面须大过桌面。另一张留手，后续可继续拆单或重新组对。
-// 只拆对子：三条/炸弹（含 3 王王炸）不参与拆分。
+// splitHighPair: with exactly a pair of A/2/jokers in hand, an opponent's
+// single on the table and no whole regular group that beats it, split one card
+// off the pair to follow (face must beat the table). The other card stays in
+// hand. Only pairs split: triples/bombs (incl. 3-joker king bombs) never do.
 func splitHighPair(hand []card.Card, top card.Shape) []card.Card {
 	if top.Kind != card.KindSingle {
 		return nil
@@ -176,7 +175,7 @@ func splitHighPair(hand []card.Card, top card.Shape) []card.Card {
 	}
 	sort.Slice(faces, func(i, j int) bool { return faces[i] < faces[j] })
 	for _, f := range faces {
-		if f < card.FaceA { // 只拆高牌对子：A/2/小王/大王
+		if f < card.FaceA { // only high pairs: A/2/small joker/big joker
 			continue
 		}
 		cs := byFace[f]
@@ -190,14 +189,14 @@ func splitHighPair(hand []card.Card, top card.Shape) []card.Card {
 	return nil
 }
 
-// bombChance 只剩炸弹时各炸弹的放行概率（分档常量见 static.go）。
+// bombChance returns the play probability for each bomb when nothing else can
+// beat the table (tier constants in static.go).
 func bombChance(b card.Shape, pot int) float64 {
 	if pot > 50 {
-		return 1 // 分大于 50 必压过对手
+		return 1 // pot over 50: must beat
 	}
 	king := b.Kind == card.KindKingBomb
 	if pot == 0 {
-		// 桌面没分：≤4×8 两成，4 张大牌面或超 4 张（含王炸）半成
 		switch {
 		case king || b.Len > 4:
 			return bombPot0Big
@@ -207,7 +206,6 @@ func bombChance(b card.Shape, pot int) float64 {
 			return bombPot0BigRank
 		}
 	}
-	// 桌面有分且 ≤50：4 张八成，5 张四成，6 张及以上（含王炸）一成
 	switch {
 	case king || b.Len >= 6:
 		return bombPot50Len6P

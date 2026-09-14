@@ -1,13 +1,11 @@
-// timeout-repro.js 验证"轮到我超时自动出牌后出牌权正常移交"：
-// 完全复刻 index.html 的 autoPlayCards（领出→hand[0]；否则过牌），
-// 断言：超时动作被服务器受理（PLAY_CARD_SUCCESS，非 ERROR），
-// 且之后牌局正常推进到 GAME_OVER。
-// 环境变量：
-//   TRY_WAIT_MS   逐张试牌等待 SUCCESS/ERROR 的上限（毫秒，默认 3000）；
-//                 测试模式可设 TRY_WAIT_MS=200 大幅加速（本机服务器响应 <50ms，
-//                 200ms 足够，超时按无响应处理会保守判失败，不会误判成功）
-//   SKIP_TIMEOUT  =1 时跳过 46s 超时等待（仅验证正常打完整局，不做超时路径断言）
-// 用法：node timeout-repro.js <url>
+// timeout-repro.js verifies that a timeout auto-play hands the turn over
+// normally: replicates index.html autoPlayCards (lead → hand[0], else pass)
+// and asserts the server accepts it (SUCCESS, not ERROR) and the game then
+// reaches GAME_OVER.
+// TRY_WAIT_MS: per-card wait cap in ms (default 3000; 200 is enough locally
+//   and never misjudges a failure as success). SKIP_TIMEOUT=1 skips the 46s
+//   wait and only checks a full normal game.
+// Usage: node timeout-repro.js <url>
 const { WsClient, waitEvent, sleep } = require('./e2e-bot.js');
 
 const BASE = process.argv[2] || 'http://127.0.0.1:8000';
@@ -28,7 +26,7 @@ const SKIP_TIMEOUT = process.env.SKIP_TIMEOUT === '1';
   const gs = await waitEvent(s, 'GAME_START', 15000);
   let hand = gs.cards[MY].cards.slice();
 
-  // 等响应：emit 后轮询 SUCCESS/ERROR（帧异步投递）
+  // Frames arrive async: poll for SUCCESS/ERROR after each emit.
   let respSeq = 0, lastResp = null;
   s.on('PLAY_CARD_SUCCESS', () => { lastResp = { seq: respSeq, ok: true }; });
   s.on('PLAY_CARD_ERROR', () => { lastResp = { seq: respSeq, ok: false }; });
@@ -40,10 +38,11 @@ const SKIP_TIMEOUT = process.env.SKIP_TIMEOUT === '1';
       if (lastResp && lastResp.seq === respSeq) return lastResp.ok;
       await sleep(10);
     }
-    return null; // 无响应
+    return null; // no response
   };
 
-  // 复刻前端 ctxCard 语义：最后一手有效牌不是"我"才需要压牌
+  // Mirrors the frontend ctxCard semantics: only need to beat when the last
+  // valid play wasn't mine.
   let ctxPosMe = true, needBeat = () => !ctxPosMe;
   let playTurn = false, timedOutOnce = false;
   s.on('CTX_PLAY_CHANGE', (d) => {
@@ -76,7 +75,7 @@ const SKIP_TIMEOUT = process.env.SKIP_TIMEOUT === '1';
       timedOutOnce = true;
       continue;
     }
-    // 之后正常打：逐张试单张（等待上限 TRY_WAIT_MS），全被拒则过牌
+    // Then play normally: try singles (capped by TRY_WAIT_MS), else pass.
     playTurn = false;
     let played = false;
     for (let i = hand.length - 1; i >= 0 && !played; i--) {

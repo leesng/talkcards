@@ -18,7 +18,7 @@ func openTest(t *testing.T) *Store {
 
 func TestSaveAndHistory(t *testing.T) {
 	s := openTest(t)
-	// 建表须带 username 列与复合索引
+	// schema must include the username column and the composite index
 	if !s.db.Migrator().HasColumn(&playerRow{}, "UserName") || !s.db.Migrator().HasIndex(&playerRow{}, "idx_game_players_user") {
 		t.Fatal("建表缺列或缺索引")
 	}
@@ -70,7 +70,7 @@ func TestSaveAndHistory(t *testing.T) {
 		t.Fatal("不存在的对局应返回 ok=false")
 	}
 
-	// 再存一局逃跑局，验证倒序与 escape 字段
+	// save an escape game too, verifying newest-first order and escape fields
 	esc := rec
 	esc.EndReason = "escape"
 	esc.Winner = nil
@@ -84,7 +84,7 @@ func TestSaveAndHistory(t *testing.T) {
 	if total != 2 || len(list) != 2 || list[0].EndReason != "escape" || list[0].Win {
 		t.Fatalf("倒序/escape 不符: %+v", list)
 	}
-	// 分页
+	// pagination
 	list, total, _ = s.HistoryList("a", 1, 1)
 	if total != 2 || len(list) != 1 || list[0].EndReason != "normal" {
 		t.Fatalf("分页不符: total=%d %+v", total, list)

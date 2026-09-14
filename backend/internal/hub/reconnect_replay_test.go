@@ -1,6 +1,4 @@
-// reconnect_replay_test.go 断线重连重放帧回归测试：
-// 上一手是"过牌"时，重连者必须还能看到桌面上压着的有效牌（否则只看到"不出"，
-// 丢失"要压什么"的信息）；重放帧带 replay 标记，客户端不得据此再扣手牌。
+// Reconnect replay regression tests.
 package hub
 
 import (
@@ -14,7 +12,7 @@ import (
 	"talkcards/backend/internal/table"
 )
 
-// TestReconnectReplaysStandingPlay 断线重连：上一手为过牌时补发桌面有效牌
+// TestReconnectReplaysStandingPlay: after a pass, the standing play is resent.
 func TestReconnectReplaysStandingPlay(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "replay.db"))
 	if err != nil {
@@ -40,11 +38,9 @@ func TestReconnectReplaysStandingPlay(t *testing.T) {
 		t.Fatal("开局后对局应挂载到桌面")
 	}
 
-	// 开局即出牌阶段
 	leader := g.Turn()
 	waitFrame(t, conns[0], EvShowTopCard, 1)
 
-	// 首出者打一张单牌（有牌权时任意单张合法）
 	var lead card.Card
 	for _, hs := range g.Hands() {
 		if hs.PosID == leader && len(hs.Cards) > 0 {
@@ -56,7 +52,7 @@ func TestReconnectReplaysStandingPlay(t *testing.T) {
 	}
 	h.onPlayCard(conns[leader], []card.Card{lead})
 
-	// 下一家过牌：此刻 LastPlay 变成过牌，桌面有效牌仍是首出那张
+	// Next player passes: LastPlay is the pass; the standing play is still the lead.
 	passer := g.Turn()
 	if passer == leader {
 		t.Fatal("首出后轮转不应仍在首出者")
@@ -70,7 +66,7 @@ func TestReconnectReplaysStandingPlay(t *testing.T) {
 		t.Fatalf("桌面有效牌快照应保留首出单张，实际 %+v", d.LastValidPlay)
 	}
 
-	// 选一个无关的旁观座位掉线（既不是首出者也不是过牌者）
+	// Bystander seat (neither leader nor passer) disconnects.
 	victim := -1
 	for i := 0; i < table.SeatCount; i++ {
 		if i != leader && i != passer && i != g.Turn() {
@@ -84,8 +80,7 @@ func TestReconnectReplaysStandingPlay(t *testing.T) {
 	victimName := "u" + string(rune('0'+victim))
 	h.onDisconnect(conns[victim])
 
-	// 重连：应收到 GAME_START + SHOW_TOP_CARD + 两帧 CTX_PLAY_CHANGE
-	// （先桌面有效牌，后最近的过牌动作）
+	// Reconnect: standing play frame first, then the latest pass.
 	back := &fakeConn{id: "back"}
 	h.onLogin(back, victimName)
 	waitFrame(t, back, EvReconnect, 1)
@@ -118,8 +113,7 @@ func TestReconnectReplaysStandingPlay(t *testing.T) {
 	}
 }
 
-// TestTrickClearFlag 一圈收分时最后一张过牌帧应带 clear 标记（客户端据此清桌并
-// 重置"要压的牌型"），圈中过牌与有效出牌帧不带。
+// TestTrickClearFlag: only the final pass of a collected trick carries clear.
 func TestTrickClearFlag(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "clear.db"))
 	if err != nil {
@@ -152,14 +146,13 @@ func TestTrickClearFlag(t *testing.T) {
 	}
 	h.onPlayCard(conns[leader], []card.Card{lead})
 
-	// 有效出牌帧：圈刚开始，不带 clear
-	playFrameNo := 2 // #1 为叫分完成后的引导帧
+	playFrameNo := 2 // #1 is the lead frame
 	pf := decodeFrame[ctxPlayChange](t, waitFrame(t, conns[0], EvCtxPlayChange, playFrameNo), EvCtxPlayChange)
 	if pf.Clear {
 		t.Fatalf("有效出牌帧不应带 clear（圈仍进行中）: %+v", pf)
 	}
 
-	// 其余玩家依次过牌直到轮转回到首出者（一圈收分）
+	// Everyone else passes until rotation returns to the leader.
 	passes := 0
 	for g.Turn() != leader {
 		passer := g.Turn()
@@ -173,7 +166,7 @@ func TestTrickClearFlag(t *testing.T) {
 		t.Fatal("应至少有一次过牌才构成一圈收分")
 	}
 
-	// 最后一次过牌帧带 clear；中间过牌帧不带
+	// Last pass carries clear; intermediate ones don't.
 	for i := 1; i <= passes; i++ {
 		fr := decodeFrame[ctxPlayChange](t, waitFrame(t, conns[0], EvCtxPlayChange, playFrameNo+i), EvCtxPlayChange)
 		last := i == passes
@@ -186,10 +179,8 @@ func TestTrickClearFlag(t *testing.T) {
 	}
 }
 
-// TestBotPlayFrameCarriesRealSeat 人机模式回归：机器人出牌广播帧的
-// ctxData.posId 必须是真实出牌座位。曾因 origin=nil 时默认 posID=0，
-// 所有机器人的牌都记到 0 号座位头上（房主恰为 0 号时前端把机器人出的
-// 牌全当成自己出的：出牌区错乱、提示按自由首出给出违规牌）。
+// TestBotPlayFrameCarriesRealSeat: regression — ctxData.posId must be the
+// real seat; a past bug defaulted it to 0, crediting all bot plays to seat 0.
 func TestBotPlayFrameCarriesRealSeat(t *testing.T) {
 	st, _ := store.Open(filepath.Join(t.TempDir(), "botseat.db"))
 	defer st.Close()
@@ -212,9 +203,9 @@ func TestBotPlayFrameCarriesRealSeat(t *testing.T) {
 		}
 	}
 
-	// trySingle 与 e2e 驱动一致：emit 单张后轮询等 SUCCESS/ERROR 帧，
-	// SUCCESS 则出手牌，全部被拒（需压更大牌）则过牌——首出时不许过牌，
-	// 全程过牌会在自己领出时被拒导致轮转停滞
+	// trySingle: emit a single, poll for the response frame (async pump).
+	// All rejected → pass; but passing is illegal when leading, so passing
+	// throughout would stall rotation on your own lead.
 	trySingle := func(c card.Card) bool {
 		before := len(c0.snapshot())
 		h.onPlayCard(c0, []card.Card{c})
@@ -255,7 +246,7 @@ func TestBotPlayFrameCarriesRealSeat(t *testing.T) {
 				}
 			}
 			if !played {
-				h.onPlayCard(c0, nil) // 压不住则过牌
+				h.onPlayCard(c0, nil) // cannot beat: pass
 			}
 		} else {
 			time.Sleep(2 * time.Millisecond)
@@ -265,7 +256,7 @@ func TestBotPlayFrameCarriesRealSeat(t *testing.T) {
 		t.Fatal("60 秒内未终局")
 	}
 
-	// 统计机器人出牌帧（ctxData.posId != 3）的座位分布
+	// Seat distribution across bot play frames (posId != 3).
 	botSeats := map[int]int{}
 	for _, fr := range c0.snapshot() {
 		ev, data, ok := cutFrame(fr)

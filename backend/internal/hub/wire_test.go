@@ -1,7 +1,4 @@
-// wire_test.go 黄金帧测试：以假连接直驱 hub 各 handler，用结构体编解码锁定
-// SHOW_TOP_CARD / CTX_PLAY_CHANGE（首出、出牌、过牌）、
-// PLAY_CARD_SUCCESS、GAME_OVER 的 wire 形态，并驱动整局至终局验证落库。
-// 期望值一律构造同款结构体后 DeepEqual 对比，不做字符串手拼。
+// wire_test.go: golden-frame tests; expected frames compared as structs.
 package hub
 
 import (
@@ -23,7 +20,7 @@ import (
 	"talkcards/backend/internal/wssrv"
 )
 
-// fakeConn 记录 Emit 帧的假连接（hubClient.pump 异步消费后在此同步落账）
+// fakeConn: records Emit frames ("EVENT|json"); pump delivery is async.
 type fakeConn struct {
 	mu     sync.Mutex
 	id     string
@@ -54,7 +51,7 @@ func (f *fakeConn) snapshot() []string {
 	return append([]string(nil), f.frames...)
 }
 
-// waitFrame 等待第 n 次出现的指定事件（n 从 1 起），返回其 json 部分
+// waitFrame: poll for the n-th occurrence of an event; frames arrive async.
 func waitFrame(t *testing.T, f *fakeConn, event string, n int) string {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -74,7 +71,6 @@ func waitFrame(t *testing.T, f *fakeConn, event string, n int) string {
 	return ""
 }
 
-// findEvent 返回首个匹配事件（未出现时 ok=false）
 func findEvent(f *fakeConn, event string) (string, bool) {
 	for _, fr := range f.snapshot() {
 		if ev, data, ok := cutFrame(fr); ok && ev == event {
@@ -101,7 +97,6 @@ func formatFrames(frames []string) string {
 	return out
 }
 
-// decodeFrame 把帧 json 解码进结构体
 func decodeFrame[T any](t *testing.T, data string, what string) T {
 	t.Helper()
 	var v T
@@ -111,7 +106,6 @@ func decodeFrame[T any](t *testing.T, data string, what string) T {
 	return v
 }
 
-// expectFrame 解码第 n 帧指定事件并与期望结构体 DeepEqual 对比
 func expectFrame[T any](t *testing.T, f *fakeConn, event string, n int, want T) {
 	t.Helper()
 	got := decodeFrame[T](t, waitFrame(t, f, event, n), event)
@@ -120,7 +114,6 @@ func expectFrame[T any](t *testing.T, f *fakeConn, event string, n int, want T) 
 	}
 }
 
-// ctxPlayFrame CTX_PLAY_CHANGE 驱动用的解析形态（Key/Type 为 any：出牌为值，过牌缺省 nil）
 type ctxPlayFrame = ctxPlayChange
 
 func TestWireGoldenFrames(t *testing.T) {
@@ -131,7 +124,7 @@ func TestWireGoldenFrames(t *testing.T) {
 	defer st.Close()
 	h := New(st, 0, nil)
 
-	// 8 人登录入座并准备 → 开局
+	// 8 players: login, sit, prepare.
 	conns := make([]*fakeConn, table.SeatCount)
 	for i := 0; i < table.SeatCount; i++ {
 		conns[i] = &fakeConn{id: fmt.Sprintf("c%d", i)}
@@ -142,10 +135,10 @@ func TestWireGoldenFrames(t *testing.T) {
 		h.onPrepare(conns[i])
 	}
 
-	// 主持模式：全员准备好不再自动开局，须由主持人（首坐者 u0）开牌
+	// Host mode: no auto-start; host (first sitter u0) starts.
 	h.onHostStartGame(conns[0], hostStartGameReq{})
 
-	// GAME_START 严格解码（未知字段即失败）：8 家手牌、牌对象仅 value/type、ht 15 元
+	// Strict GAME_START decode: unknown fields fail.
 	gs := waitFrame(t, conns[0], EvGameStart, 1)
 	var strictStart struct {
 		Cards []struct {
@@ -170,7 +163,7 @@ func TestWireGoldenFrames(t *testing.T) {
 		if len(grp.Cards) != 40 && len(grp.Cards) != 41 {
 			t.Fatalf("pos %d 手牌 %d 张异常", i, len(grp.Cards))
 		}
-		// HT 红桃统计（大小王 type=0 也计入）应与实际红桃牌数一致
+		// HT tally must match the actual heart count.
 		htSum, hearts := 0, 0
 		for _, v := range grp.HT {
 			htSum += v
@@ -186,27 +179,26 @@ func TestWireGoldenFrames(t *testing.T) {
 		}
 	}
 
-	// 开局直接进入出牌阶段：SHOW_TOP_CARD 黄金（含首出者）
+	// SHOW_TOP_CARD golden; lead frame golden (longer first-lead countdown).
 	stc := decodeFrame[showTopCard](t, waitFrame(t, conns[0], EvShowTopCard, 1), EvShowTopCard)
 	P := stc.DizhuPosID
 	if want := (showTopCard{TopCards: []card.Card{}, DizhuPosID: P, Timeout: playTiming}); !reflect.DeepEqual(stc, want) {
 		t.Fatalf("SHOW_TOP_CARD = %+v, 期望 %+v", stc, want)
 	}
-	// 首出引导帧黄金（首轮首出倒计时放宽为 firstPlayTiming）
+	// Lead frame golden (longer first-lead countdown).
 	expectFrame(t, conns[0], EvCtxPlayChange, 1, ctxPlayChange{
 		CtxData: ctxPlayCtx{Len: 0, Key: "", Type: "", Cards: []card.Card{}, PosID: P},
 		SumFeng: zeroPosMap(), PosID: P, Timeout: firstPlayTiming,
-		Clear: true, // 引导帧=领出状态：桌面无牌可压，客户端应清桌
+		Clear: true,
 	})
-
-	// 先手出最小单张 → 出牌帧 / PLAY_CARD_SUCCESS 黄金（旁观者与出牌者各验一次）
+	// Leader plays smallest single → play + PLAY_CARD_SUCCESS goldens.
 	first := hands[P][0]
 	h.onPlayCard(conns[P], []card.Card{first})
 	Q := (P + 1) % table.SeatCount
 	R := (Q + 1) % table.SeatCount
 	tmp := first.Score()
 	expectFrame(t, conns[R], EvCtxPlayChange, 2, ctxPlayChange{
-		CtxData: ctxPlayCtx{ // JSON 数字解码进 any 为 float64
+		CtxData: ctxPlayCtx{ // JSON numbers decode into any as float64
 			Len: 1, Key: float64(first.Face), Type: "A", Cards: []card.Card{first}, PosID: P,
 		},
 		SumFeng: zeroPosMap(), TmpFeng: tmp, PosID: Q, Timeout: playTiming,
@@ -214,16 +206,17 @@ func TestWireGoldenFrames(t *testing.T) {
 	expectFrame(t, conns[P], EvPlayCardOk, 1, playCardSuccess{Data: []card.Card{first}, TmpFeng: tmp, SumFeng: zeroPosMap()})
 	hands[P] = hands[P][1:]
 
-	// 下家过牌 → 过牌帧黄金（key/type 缺省即 nil）
+	// Next player passes → pass frame golden (key/type omitted).
 	h.onPlayCard(conns[Q], nil)
 	expectFrame(t, conns[R], EvCtxPlayChange, 3, ctxPlayChange{
 		CtxData: ctxPlayCtx{Len: 0, Cards: []card.Card{}, PosID: Q},
 		SumFeng: zeroPosMap(), TmpFeng: tmp, PosID: R, Timeout: playTiming, IsPass: true,
 	})
 
-	// 自由驱动至终局：按服务器轮转出牌（首出者出最小单，其余能压则压、压不住过）
+	// Drive to the finish following server rotation: leader plays the
+	// smallest single, others beat or pass.
 	owner, topRank, turn := P, int(first.Face), R
-	seenCtx := 3 // conns[R] 已消费的 CTX_PLAY_CHANGE 帧数
+	seenCtx := 3
 	goData := ""
 	for step := 0; goData == "" && step < 20000; step++ {
 		p := turn
@@ -232,9 +225,9 @@ func TestWireGoldenFrames(t *testing.T) {
 		}
 		var play []card.Card
 		if p == owner {
-			play = []card.Card{hands[p][0]} // 首出：最小单张
+			play = []card.Card{hands[p][0]}
 		} else {
-			for _, c := range hands[p] { // 跟牌：找最小可压单张，找不到则过牌
+			for _, c := range hands[p] { // smallest beating single, else pass
 				if int(c.Face) > topRank {
 					play = []card.Card{c}
 					break
@@ -256,7 +249,7 @@ func TestWireGoldenFrames(t *testing.T) {
 		turn = fr.PosID
 		if !fr.IsPass && len(fr.CtxData.Cards) > 0 {
 			lastPos := fr.CtxData.PosID
-			if len(hands[lastPos]) == 0 { // 出完触发接风：归属转为新轮转者
+			if len(hands[lastPos]) == 0 { // finished: new leader takes ownership
 				owner = turn
 			} else {
 				owner = lastPos
@@ -266,8 +259,8 @@ func TestWireGoldenFrames(t *testing.T) {
 			}
 		}
 
-		// 终局判定与服务器同构：全队出完，或出完者累计抓分 ≥300。
-		// 条件达成才等 GAME_OVER（与 ctx 帧同队列，必然紧随其后）
+		// End condition mirrors the server: team all out or out-players'
+		// points ≥ 300; GAME_OVER follows in the same queue.
 		teamAllOut := [2]bool{true, true}
 		outSum := [2]int{}
 		for i := 0; i < table.SeatCount; i++ {
@@ -299,10 +292,9 @@ func TestWireGoldenFrames(t *testing.T) {
 		t.Fatalf("GAME_OVER 异常: %+v", res)
 	}
 
-	// 落库为异步写队列，终局后需先排空再查库
+	// Async save queue: drain before querying.
 	h.Flush()
 
-	// 终局后应已落库（本局用户战绩可查）
 	list, total, err := st.HistoryList("u0", 1, 0)
 	if err != nil || total != 1 || len(list) != 1 {
 		t.Fatalf("战绩应恰好 1 条: total=%d err=%v", total, err)
@@ -312,11 +304,9 @@ func TestWireGoldenFrames(t *testing.T) {
 	}
 }
 
-// 编译期保证 fakeConn 满足 wssrv.Conn
 var _ wssrv.Conn = (*fakeConn)(nil)
 
-// TestCancelPrepare 取消准备：未开局时可取消（座位回到未准备、房间广播），
-// 对局进行中取消应被拒绝
+// TestCancelPrepare: cancel works pre-game, rejected mid-game.
 func TestCancelPrepare(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "cancel.db"))
 	if err != nil {
@@ -332,20 +322,19 @@ func TestCancelPrepare(t *testing.T) {
 	h.onSitdown(c0, sitdownReq{DeskID: 1, PosID: 0})
 	h.onSitdown(c1, sitdownReq{DeskID: 1, PosID: 1})
 
-	// 未准备时取消：无效但不应崩溃
+	// Cancel while unprepared: invalid but must not crash.
 	h.onCancelPrepare(c0)
 
-	// 准备后取消：发起者收 CANCEL_PREPARE_SUCCESS，同房间他人收 POS_STATUS_CHANGE(1)
 	h.onPrepare(c0)
 	h.onCancelPrepare(c0)
 	waitFrame(t, c0, EvCancelPrepareSuccess, 1)
-	// 第 1 帧是准备的广播(state=2)，第 2 帧才是取消(state=1)
+	// #1 is the prepare broadcast (state=2), #2 the cancel (state=1).
 	expectFrame(t, c1, EvPosStatusChange, 2, posStatusChange{PosID: 0, State: 1})
 	if s := h.lobby.Desk(1).Seat(0); s.State != 1 {
 		t.Fatalf("取消后座位应回到未准备(1)，实际 %d", s.State)
 	}
 
-	// 全员准备 → 主持人开牌开局；对局中取消应被拒绝（座位保持已准备）
+	// Everyone ready → host starts; cancel mid-game must be rejected.
 	for i := 0; i < table.SeatCount; i++ {
 		if i > 1 {
 			name := fmt.Sprintf("u%d", i)
@@ -357,7 +346,7 @@ func TestCancelPrepare(t *testing.T) {
 	}
 	h.onPrepare(c0)
 	h.onPrepare(c1)
-	h.onHostStartGame(c0, hostStartGameReq{}) // c0 是首坐者即主持人
+	h.onHostStartGame(c0, hostStartGameReq{}) // c0 = first sitter = host
 	waitFrame(t, c0, EvGameStart, 1)
 	before := len(c0.snapshot())
 	h.onCancelPrepare(c0)
@@ -371,9 +360,8 @@ func TestCancelPrepare(t *testing.T) {
 	}
 }
 
-// TestHostMode 主持模式：首坐者获得主持权（HOST_CHANGE 广播）；全员准备好不自动开局，
-// 非主持人开牌被拒，主持人开牌生效；断线（座位保留）主持权不变，
-// 主持人真正离桌则自动顺延给下一个有人的座位，全桌清空复位为 -1。
+// TestHostMode: first sitter becomes host; non-host start rejected; host
+// rights survive disconnect and pass on leaving, resetting to -1 when empty.
 func TestHostMode(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "host.db"))
 	if err != nil {
@@ -387,10 +375,9 @@ func TestHostMode(t *testing.T) {
 	h.onLogin(c0, "host")
 	h.onLogin(c1, "guest")
 
-	// 首坐者获得主持权并广播 HOST_CHANGE
+	// First sitter becomes host; later sitters' SITDOWN_SUCCESS carries the host seat.
 	h.onSitdown(c0, sitdownReq{DeskID: 1, PosID: 3})
 	expectFrame(t, c0, EvHostChange, 1, hostChange{PosID: 3, UserName: "host"})
-	// 后坐者不触发新的 HOST_CHANGE，但 SITDOWN_SUCCESS 里带当前主持人座位号
 	h.onSitdown(c1, sitdownReq{DeskID: 1, PosID: 5})
 	sd := decodeFrame[sitdownSuccess](t, waitFrame(t, c1, EvSitdownSuccess, 1), "SITDOWN_SUCCESS")
 	if sd.HostPosID != 3 {
@@ -400,7 +387,7 @@ func TestHostMode(t *testing.T) {
 		t.Fatalf("主持权应归首坐者(3)，实际 %d", d.HostPosID)
 	}
 
-	// 其余 6 人入座准备，最后两人也准备 → 全员已准备
+	// Everyone ready.
 	for i := 0; i < table.SeatCount; i++ {
 		if i == 3 || i == 5 {
 			continue
@@ -413,7 +400,7 @@ func TestHostMode(t *testing.T) {
 	h.onPrepare(c0)
 	h.onPrepare(c1)
 
-	// 非主持人开牌：被拒，收 MESSAGE 且无 GAME_START
+	// Non-host start: rejected, no GAME_START.
 	before := len(c1.snapshot())
 	h.onHostStartGame(c1, hostStartGameReq{})
 	msg := waitFrame(t, c1, EvMessage, 1)
@@ -426,11 +413,11 @@ func TestHostMode(t *testing.T) {
 		}
 	}
 
-	// 主持人开牌：生效
+	// Host start: works.
 	h.onHostStartGame(c0, hostStartGameReq{})
 	waitFrame(t, c0, EvGameStart, 1)
 
-	// 主持人断线（对局进行中，座位保留等待重连）：主持权保留不转移
+	// Host disconnects mid-game: seat held, host rights unchanged.
 	h.onDisconnect(c0)
 	if d := h.lobby.Desk(1); d.HostPosID != 3 {
 		t.Fatalf("主持人断线后主持权应保留(3)，实际 %d", d.HostPosID)
@@ -439,7 +426,7 @@ func TestHostMode(t *testing.T) {
 		t.Fatalf("主持人断线座位应保留等待重连")
 	}
 
-	// 前主持人重连坐回：仍是主持人
+	// Host reconnects: still host.
 	c0b := &fakeConn{id: "c0b"}
 	h.onLogin(c0b, "host")
 	waitFrame(t, c0b, EvReconnect, 1)
@@ -447,15 +434,13 @@ func TestHostMode(t *testing.T) {
 		t.Fatalf("前主持人重连后应仍是主持人(3)，实际 %d", d.HostPosID)
 	}
 
-	// 主持人真正离桌（对局因逃跑终止、座位释放）：主持权自动顺延给下一个有人的座位（4）
+	// Host leaves: rights pass to the next occupied seat (4), then 5, then -1.
 	h.onUnsitdown(c0b)
 	expectFrame(t, c1, EvHostChange, 1, hostChange{PosID: 4, UserName: "u4"})
 	if d := h.lobby.Desk(1); d.HostPosID != 4 {
 		t.Fatalf("主持人离桌后主持权应顺延给 4，实际 %d", d.HostPosID)
 	}
 
-	// 非主持人离场不影响主持权；主持人（现为 4）在其他人在座时离桌会继续顺延（→5），
-	// 最后一人（同时也是主持人）离桌 → 桌空复位并广播 HOST_CHANGE(-1)
 	for _, i := range []int{0, 1, 2, 6, 7} {
 		h.releaseSeat(h.lobby.Desk(1), i, nil)
 	}
@@ -470,8 +455,8 @@ func TestHostMode(t *testing.T) {
 	}
 }
 
-// TestHostFillBots 人机模式：单人入座准备，开牌时确认空位填充机器人；
-// 不确认则被拒；填充后机器人自动叫分/出牌至终局，终局机器人座位清理，战绩落库。
+// TestHostFillBots: lone player + bot fill; without confirmation rejected;
+// bots play to the finish; seats cleaned; record persisted.
 func TestHostFillBots(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "fillbots.db"))
 	if err != nil {
@@ -479,25 +464,24 @@ func TestHostFillBots(t *testing.T) {
 	}
 	defer st.Close()
 	h := New(st, 0, nil)
-	h.botDelayMin, h.botDelayMax = time.Millisecond, time.Millisecond // 测试加速机器人行动
+	h.botDelayMin, h.botDelayMax = time.Millisecond, time.Millisecond
 
 	c0 := &fakeConn{id: "c0"}
 	h.onLogin(c0, "host")
 	h.onSitdown(c0, sitdownReq{DeskID: 1, PosID: 3})
 	h.onPrepare(c0)
 
-	// 有空位但不确认填充：被拒，提示确认，无 GAME_START
+	// No fill confirmation: rejected, no GAME_START.
 	h.onHostStartGame(c0, hostStartGameReq{})
 	if msg := waitFrame(t, c0, EvMessage, 1); !strings.Contains(msg, "空位") {
 		t.Fatalf("不确认填充应收到空位提示，实际 %q", msg)
 	}
-	time.Sleep(20 * time.Millisecond) // 等发送队列排空，确认无 GAME_START 混入
+	time.Sleep(20 * time.Millisecond) // drain queue before asserting
 	if _, ok := findEvent(c0, EvGameStart); ok {
 		t.Fatalf("不确认填充不应开局")
 	}
 
-	// 确认填充：7 个空位变机器人（POS_STATUS_CHANGE 带 isBot），随后开局。
-	// 帧经各会话 pump 异步送达，轮询等待 7 帧到齐。
+	// Confirm fill: 7 bots (async pump delivery — poll until all 7 in).
 	h.onHostStartGame(c0, hostStartGameReq{FillBots: true})
 	botSeats := 0
 	deadline := time.Now().Add(3 * time.Second)
@@ -527,7 +511,7 @@ func TestHostFillBots(t *testing.T) {
 		t.Fatalf("真人座位不应被标记为机器人")
 	}
 
-	// 驱动至终局：机器人自动行动，轮到真人（pos 3）时代其按同策略叫分/出牌
+	// Bots act on their own; play for the human (pos 3) on their turn.
 	gameDeadline := time.Now().Add(30 * time.Second)
 	for {
 		if _, ok := findEvent(c0, EvGameOver); ok {
@@ -541,7 +525,7 @@ func TestHostFillBots(t *testing.T) {
 		d := h.lobby.Desk(1)
 		var act struct {
 			phase game.Phase
-			mine  bool // 是否轮到真人（pos 3）
+			mine  bool
 			play  []card.Card
 		}
 		if g := d.Game; g != nil {
@@ -556,7 +540,7 @@ func TestHostFillBots(t *testing.T) {
 					}
 				}
 				if top, ok := g.TrickTop(); ok {
-					act.play = bot.Follow(hand, top) // 跟不住返回 nil → 过牌
+					act.play = bot.Follow(hand, top) // nil → pass
 				} else {
 					act.play = bot.Lead(hand)
 				}
@@ -564,7 +548,7 @@ func TestHostFillBots(t *testing.T) {
 		}
 		h.mu.Unlock()
 
-		// 只在轮到真人时代打（否则会越序毒化对局）；过牌也要发送 nil
+		// Play only on the human's turn (out-of-turn plays poison the game).
 		if act.mine && act.phase == game.PhasePlaying {
 			h.onPlayCard(c0, act.play)
 		} else {
@@ -572,7 +556,7 @@ func TestHostFillBots(t *testing.T) {
 		}
 	}
 
-	// 终局：机器人座位清空，真人座位归位未准备
+	// Bot seats emptied, human seat back to unprepared.
 	for pos := 0; pos < table.SeatCount; pos++ {
 		s := h.lobby.Desk(1).Seat(pos)
 		if pos == 3 {
@@ -586,7 +570,7 @@ func TestHostFillBots(t *testing.T) {
 		}
 	}
 
-	// 战绩落库：含真人 + 7 机器人共 8 名玩家
+	// Persisted: the human + 7 bots = 8 players.
 	h.Flush()
 	list, total, err := st.HistoryList("host", 20, 0)
 	if err != nil || total != 1 {
@@ -597,7 +581,6 @@ func TestHostFillBots(t *testing.T) {
 	}
 }
 
-// countEvent 统计指定事件出现次数（诊断用）
 func countEvent(f *fakeConn, event string) int {
 	n := 0
 	for _, fr := range f.snapshot() {

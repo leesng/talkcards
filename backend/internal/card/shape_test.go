@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// vals 由牌面值序列构造 Card 牌组（花色轮换）
 func vals(vs ...int) []Card {
 	cs := make([]Card, 0, len(vs))
 	for i, v := range vs {
@@ -17,9 +16,10 @@ func vals(vs ...int) []Card {
 	return cs
 }
 
-// TestClassifyGolden 牌型识别冻结基线（与已删除的旧 core-validator 语义对拍后固化）：
-// 全同面 1-24 张才有解读；基础牌型在前王炸在后；王炸仅 3-6 张同王；
-// 7+ 张同王只有普通炸解读（6 副牌下不可达，保留旧语义）；不校验牌面范围。
+// TestClassifyGolden frozen baseline (fixed after diffing against the deleted
+// core-validator): same-face 1-24 cards only; base shapes before king bombs;
+// king bombs only for 3-6 identical jokers; 7+ identical jokers get only the
+// normal-bomb reading (unreachable, legacy semantics); face range unchecked.
 func TestClassifyGolden(t *testing.T) {
 	rep := func(n, v int) []int {
 		vs := make([]int, n)
@@ -73,7 +73,7 @@ func TestClassifyGolden(t *testing.T) {
 	}
 }
 
-// shapeOf 从旧 lastCardInfo 语义（type 字符串 + key）构造桌面牌型
+// shapeOf builds a table shape from the legacy lastCardInfo form (type string + key).
 func shapeOf(typ string, key, length int) Shape {
 	var n int
 	switch {
@@ -97,7 +97,6 @@ func shapeOf(typ string, key, length int) Shape {
 	}
 }
 
-// beatsAny 候选牌组按 Classify 顺序逐解读尝试压制（与旧 game.Validate 语义一致）
 func beatsAny(candidate []int, table Shape) bool {
 	for _, s := range Classify(vals(candidate...)) {
 		if s.Beats(table) {
@@ -107,7 +106,7 @@ func beatsAny(candidate []int, table Shape) bool {
 	return false
 }
 
-// TestBeatsMatrix 压牌矩阵（与 game 包 TestValidateMatrix 同源）
+// TestBeatsMatrix mirrors game's TestValidateMatrix.
 func TestBeatsMatrix(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -157,7 +156,7 @@ func TestBeatsMatrix(t *testing.T) {
 	}
 }
 
-// TestBeatsAntisymmetric 压制关系反对称（同组随机牌型两两互压不成立）
+// TestBeatsAntisymmetric checks the beat relation is antisymmetric.
 func TestBeatsAntisymmetric(t *testing.T) {
 	r := rand.New(rand.NewSource(2))
 	shapes := []Shape{}
@@ -179,7 +178,7 @@ func TestBeatsAntisymmetric(t *testing.T) {
 	}
 }
 
-// TestCardJSONCodec wire 字节逐字兼容 + 往返
+// TestCardJSONCodec asserts byte-exact wire compatibility and round-trips.
 func TestCardJSONCodec(t *testing.T) {
 	b, err := json.Marshal(Card{Face: JO, Suit: Heart})
 	if err != nil || string(b) != `{"value":17,"type":0}` {
@@ -191,7 +190,6 @@ func TestCardJSONCodec(t *testing.T) {
 	}
 }
 
-// TestNewDeck 6 副 × 54 = 324 张，每种面值 24 张（两王各 6 张）
 func TestNewDeck(t *testing.T) {
 	deck := NewDeck()
 	if len(deck) != 324 {
@@ -211,7 +209,6 @@ func TestNewDeck(t *testing.T) {
 	}
 }
 
-// TestScoreAndOrdinal 分牌分值与大小序
 func TestScoreAndOrdinal(t *testing.T) {
 	scoreCases := map[Face]int{Face3: 0, Face5: 5, Face10: 10, FaceK: 10, FaceA: 0, Jo: 0, JO: 0}
 	for f, want := range scoreCases {

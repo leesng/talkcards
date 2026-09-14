@@ -1,4 +1,4 @@
-// session_test.go 会话注册表：查找、按名去重、移除关闭队列、同连接二次登录替换。
+// Session registry tests.
 package hub
 
 import (
@@ -32,7 +32,6 @@ func TestSessionRegistry(t *testing.T) {
 		t.Fatalf("遍历应保持登录顺序，实际 %v", order)
 	}
 
-	// remove 摘除并关闭发送队列
 	if got := r.remove(c1); got != s1 {
 		t.Fatalf("remove 应返回被移除会话")
 	}
@@ -46,7 +45,7 @@ func TestSessionRegistry(t *testing.T) {
 		t.Fatalf("重复移除应返回 nil")
 	}
 
-	// 同一连接二次登录：替换旧会话，注册表不残留孤儿
+	// Second login on the same connection replaces the old session.
 	s3 := newTestSession(c2, 3, "c", -1)
 	r.add(s3)
 	if r.find(c2) != s3 || r.byName("c") != s3 {

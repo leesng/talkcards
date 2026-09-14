@@ -1,8 +1,7 @@
-// dict.go 牌规则字典表（纯数据常量集中存放）：面值显示名、花色显示名、
-// 分牌分值、王炸合法张数。均为不可变数据，供包内各处引用；改动规则数据只看这里。
+// dict.go immutable rule data tables: face/suit display names, score values,
+// legal king-bomb lengths. Rule data changes go here only.
 package card
 
-// faceNames 牌面显示名（10 及以下数字，J/Q/K/A，jo/JO）
 var faceNames = map[Face]string{
 	Face3:  "3",
 	Face4:  "4",
@@ -21,7 +20,7 @@ var faceNames = map[Face]string{
 	JO:     "JO",
 }
 
-// suitNames 花色显示名（历史编码沿用 A/B/C/D，非标准花色符号）
+// suitNames uses the legacy A/B/C/D letters, not standard suit symbols.
 var suitNames = map[Suit]string{
 	Heart:   "A",
 	Diamond: "B",
@@ -29,12 +28,12 @@ var suitNames = map[Suit]string{
 	Club:    "D",
 }
 
-// scoreTable 分牌分值（5 计 5 分，10/K 计 10 分，缺省 0 分）
 var scoreTable = map[Face]int{
 	Face5:  5,
 	Face10: 10,
 	FaceK:  10,
 }
 
-// kingBombLens 王炸合法张数表（7 张以上同王只剩普通炸解读，不可达但保留旧语义）
+// kingBombLens: 7+ identical jokers keep only the normal-bomb interpretation
+// (unreachable with 6 decks, kept for legacy semantics).
 var kingBombLens = map[int]bool{3: true, 4: true, 5: true, 6: true}

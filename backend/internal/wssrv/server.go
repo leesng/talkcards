@@ -1,14 +1,7 @@
-// Package wssrv 纯 WebSocket 通信层（github.com/coder/websocket），
-// 取代原 go-socket.io fork。协议为单层 JSON 信封：
-//
-//	{"type":"<事件名>","data":<载荷>}   // data 可缺省（无载荷事件）
-//
-// 事件名与载荷字段和旧 Socket.IO 事件契约完全一致（见 hub/events.go），
-// 前端仅换用 js/mySocket.js 的等价客户端，业务代码零改动。
-//
-// 生命周期：每个连接一个读循环（串行派发事件，对应 Node 单线程语义）与
-// 一个写循环（串行发送 + 周期 ping）。任一方退出即触发唯一的 OnDisconnect。
-// 客户端正常关闭、杀进程、断网（ping 超时兜底）均能即时回收会话。
+// Package wssrv is the plain-WebSocket transport (github.com/coder/websocket).
+// Protocol: single-layer JSON envelope {"type":"<event>","data":<payload>}
+// (data may be omitted); event names and payloads match the old Socket.IO
+// contract exactly (see hub/events.go).
 package wssrv
 
 import (
@@ -25,25 +18,25 @@ import (
 )
 
 const (
-	pingInterval = 25 * time.Second // 心跳间隔，对齐 Node engine.io 默认值
-	pingTimeout  = 60 * time.Second // pong 等待上限（断网兜底；TCP 关闭由读循环即时感知）
+	pingInterval = 25 * time.Second // matches the Node engine.io default
+	pingTimeout  = 60 * time.Second // network-drop fallback; TCP closes are seen by the read loop immediately
 	writeTimeout = 10 * time.Second
-	outBuffer    = 256     // 单连接待发帧缓冲
-	maxFrame     = 1 << 16 // 64KB 读上限，出牌载荷远小于此
+	outBuffer    = 256
+	maxFrame     = 1 << 16 // 64KB read limit; play payloads are far smaller
 )
 
-// Conn hub 侧可见的连接接口。实现为指针类型，可直接比较（broadCastRoom 排除自身用）
+// Conn is the connection interface visible to the hub. It is a pointer type
+// so instances compare directly (used by broadCastRoom to skip the sender).
 type Conn interface {
-	// Emit 非阻塞发送；v 为 nil 时发送无载荷事件。连接已死时静默丢弃并记日志
+	// Emit sends non-blockingly; v == nil sends an event without payload.
+	// Frames to a dead connection are dropped silently and logged.
 	Emit(event string, v any)
-	// Close 主动断开（触发 OnDisconnect）
 	Close()
 }
 
-// Handler 事件处理器；data 为信封 data 字段原文，无载荷时为 nil
+// Handler receives the raw envelope "data" field; nil when the event has no payload.
 type Handler func(c Conn, data json.RawMessage)
 
-// Server WebSocket 服务端：事件路由 + 连接生命周期
 type Server struct {
 	logger   *slog.Logger
 	mu       sync.RWMutex
@@ -52,7 +45,6 @@ type Server struct {
 	sidSeq   atomic.Int64
 }
 
-// New 创建 WebSocket 服务端
 func New(logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
@@ -60,14 +52,13 @@ func New(logger *slog.Logger) *Server {
 	return &Server{logger: logger, handlers: make(map[string]Handler)}
 }
 
-// OnEvent 注册事件处理器（须在开始服务前注册完毕）
+// OnEvent and OnDisconnect must be called before serving starts.
 func (s *Server) OnEvent(event string, fn Handler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handlers[event] = fn
 }
 
-// OnDisconnect 注册断开回调（须在开始服务前注册）
 func (s *Server) OnDisconnect(fn func(Conn)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,9 +77,8 @@ func (s *Server) disconnectHandler() func(Conn) {
 	return s.onDisc
 }
 
-// ServeHTTP 处理一次 WebSocket 升级直至连接结束
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 游戏服务器不做来源校验（对齐旧版 CheckOrigin:true）
+	// No origin check (matches the legacy CheckOrigin:true behavior).
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {
 		return
@@ -108,8 +98,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.shutdown()
 }
 
-// ---------- 连接实现 ----------
-
 type conn struct {
 	id     string
 	srv    *Server
@@ -119,7 +107,7 @@ type conn struct {
 	once   sync.Once
 }
 
-// readPump 读循环：串行读取并派发信封；任何读错误即结束连接
+// readPump reads and dispatches envelopes serially; any read error ends the connection.
 func (c *conn) readPump(ctx context.Context) {
 	for {
 		typ, data, err := c.ws.Read(ctx)
@@ -127,7 +115,7 @@ func (c *conn) readPump(ctx context.Context) {
 			return
 		}
 		if typ != websocket.MessageText {
-			continue // 本协议不使用二进制帧
+			continue // this protocol never uses binary frames
 		}
 		var env envelope
 		if err := json.Unmarshal(data, &env); err != nil || env.Type == "" {
@@ -140,7 +128,7 @@ func (c *conn) readPump(ctx context.Context) {
 	}
 }
 
-// writePump 写循环：串行发送 out 中的帧，并周期 ping 检测断网
+// writePump sends frames from out serially and pings periodically to detect dead peers.
 func (c *conn) writePump(ctx context.Context) {
 	tick := time.NewTicker(pingInterval)
 	defer tick.Stop()
@@ -151,7 +139,7 @@ func (c *conn) writePump(ctx context.Context) {
 			err := c.ws.Write(wctx, websocket.MessageText, frame)
 			cancel()
 			if err != nil {
-				c.cancel() // 通知读循环退出，统一走 shutdown
+				c.cancel() // unblocks the read loop; both funnel into shutdown
 				return
 			}
 		case <-tick.C:
@@ -168,7 +156,8 @@ func (c *conn) writePump(ctx context.Context) {
 	}
 }
 
-// Emit 非阻塞入队；队列满说明接收方早已失联，丢弃并记录
+// Emit enqueues without blocking; a full queue means the peer is long gone,
+// so the frame is dropped and logged.
 func (c *conn) Emit(event string, v any) {
 	frame, err := marshalEnvelope(event, v)
 	if err != nil {
@@ -182,10 +171,9 @@ func (c *conn) Emit(event string, v any) {
 	}
 }
 
-// Close 由业务层主动断开：cancel 使读/写循环退出并触发 OnDisconnect
 func (c *conn) Close() { c.cancel() }
 
-// shutdown 收尾：保证一次性地关连接、触发断开回调
+// shutdown closes the connection and fires OnDisconnect exactly once.
 func (c *conn) shutdown() {
 	c.once.Do(func() {
 		c.cancel()
@@ -195,8 +183,6 @@ func (c *conn) shutdown() {
 		}
 	})
 }
-
-// ---------- 信封 ----------
 
 type envelope struct {
 	Type string          `json:"type"`

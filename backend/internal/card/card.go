@@ -1,4 +1,4 @@
-// card.go 牌领域模型：Face/Suit 与 wire 编码 {"value":3-17,"type":0-3} 的转换收敛于此。
+// card.go card domain model: Face/Suit and the wire encoding {"value":3-17,"type":0-3}.
 package card
 
 import (
@@ -6,8 +6,8 @@ import (
 	"fmt"
 )
 
-// Face 牌面，底层数值即 wire 的 value（3-13 普通牌，14=A，15=2，16=小王，17=大王），
-// 天然可比较即大小序（3 < 4 < … < A < 2 < jo < JO）。Ordinal() 给出 1-15 的人读序。
+// Face underlying value is the wire "value": 3-13 normal, 14=A, 15=2, 16=small joker, 17=big joker.
+// Values compare as strength order (3 < … < A < 2 < jo < JO).
 type Face int16
 
 const (
@@ -24,8 +24,8 @@ const (
 	FaceK  Face = 13
 	FaceA  Face = 14
 	Face2  Face = 15
-	Jo     Face = 16 // 小王
-	JO     Face = 17 // 大王
+	Jo     Face = 16 // small joker
+	JO     Face = 17 // big joker
 )
 
 func (f Face) String() string {
@@ -35,34 +35,32 @@ func (f Face) String() string {
 	return fmt.Sprintf("%d", int(f))
 }
 
-// IsJoker 是否为王（16/17）
 func (f Face) IsJoker() bool { return f == Jo || f == JO }
 
-// Suit 花色，底层即 wire 的 type：A♥=0 B♦=1 C♠=2 D♣=3；王无花色（恒 0，与旧编码一致）
+// Suit underlying value is the wire "type": 0♥ 1♦ 2♠ 3♣. Jokers have no suit
+// (always 0, matching the legacy encoding).
 type Suit int16
 
 const (
-	Heart   Suit = 0 // A
-	Diamond Suit = 1 // B
-	Spade   Suit = 2 // C
-	Club    Suit = 3 // D
+	Heart   Suit = 0
+	Diamond Suit = 1
+	Spade   Suit = 2
+	Club    Suit = 3
 )
 
 func (s Suit) String() string { return suitNames[s] }
 
-// Card 一张牌。同面牌跨副完全可互换（6 副 × 54），无实例身份。
+// Card: same-face cards across the 6 decks are fully interchangeable; no instance identity.
 type Card struct {
 	Face Face
 	Suit Suit
 }
 
-// Ordinal 牌面大小序 1-15（3=1 … 2=13，jo=14，JO=15）
+// Ordinal returns the 1-15 human-readable rank order.
 func (c Card) Ordinal() int { return int(c.Face) - 2 }
 
-// Score 分牌分值：5 计 5 分，10/K 计 10 分，其余 0
 func (c Card) Score() int { return scoreTable[c.Face] }
 
-// IsJoker 是否为王
 func (c Card) IsJoker() bool { return c.Face.IsJoker() }
 
 func (c Card) String() string {
@@ -72,7 +70,8 @@ func (c Card) String() string {
 	return c.Face.String() + c.Suit.String()
 }
 
-// wireCard 与前端约定的牌编码：value 3-13 普通牌 14=A 15=2 16=小王 17=大王；type 0红桃 1方块 2黑桃 3草花
+// wireCard frontend card encoding: value 3-13 normal, 14=A, 15=2, 16=small joker, 17=big joker;
+// type 0=hearts 1=diamonds 2=spades 3=clubs.
 type wireCard struct {
 	Value int `json:"value"`
 	Type  int `json:"type"`
@@ -91,7 +90,8 @@ func (c *Card) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// NewDeck 6 副 × 54 = 324 张（大小王 type=0，计入红桃统计，与旧发牌一致）
+// NewDeck builds 6 decks × 54 = 324 cards. Jokers use type=0, so they count
+// toward the hearts statistics — matches the legacy deal.
 func NewDeck() []Card {
 	deck := make([]Card, 0, 324)
 	for i := 0; i < 6; i++ {

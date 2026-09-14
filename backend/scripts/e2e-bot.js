@@ -1,12 +1,11 @@
-// e2e-bot.js — 多客户端端到端验收：用户名登录 / 完整牌局 / 断线重连 / 逃跑超时 / 大厅 / 历史战绩。
-// 通信层为纯 WebSocket + JSON 信封 {"type":..,"data":..}（需 ws 包于 NODE_PATH，
-// 或使用仓库根 node_modules）。仅适用于 Go 版（原 Node 版为 socket.io 协议，不兼容）。
-//   node e2e-bot.js [url]        默认 http://127.0.0.1:8000
-// 注意：场景 B（逃跑超时）需服务端以较短 --reconnect-timeout（如 5 秒）启动。
+// e2e-bot.js multi-client E2E acceptance (login/full game/reconnect/escape/lobby/history)
+// over plain WebSocket + JSON envelopes; requires `ws` from the repo-root node_modules.
+// Usage: node e2e-bot.js [url]   (default http://127.0.0.1:8000)
+// Scenario B needs a short --reconnect-timeout (e.g. 5s) on the server.
 const WebSocket = require('ws');
 
-// URL 优先级：命令行参数 > E2E_URL 环境变量 > 默认。
-// 注意 require 复用（node -e / 其它脚本）时 argv[2] 不属于本脚本，用 E2E_URL 传 URL。
+// URL precedence: argv > E2E_URL > default. When required from other scripts,
+// argv[2] is not ours — pass the URL via E2E_URL.
 const BASE = process.argv[2] && !process.argv[2].startsWith('-')
   ? process.argv[2]
   : (process.env.E2E_URL || 'http://127.0.0.1:8000');
@@ -16,18 +15,18 @@ function check(cond, label) {
   else { failed = true; console.error('  FAIL', label); }
 }
 
-// ---------- 迷你客户端：on/once/off/emit/close，接口对齐旧 socket.io 用法 ----------
 class WsClient {
   constructor() {
-    this.handlers = new Map(); // type -> Set(fn)
-    this.pending = new Map();  // type -> [data] 无监听器时暂存（同一 tick 背靠背多帧时，
-                               // 新监听器要到微任务才挂上，不暂存会丢事件）
+    this.handlers = new Map();
+    // Frames arriving with no listener yet are buffered here: back-to-back
+    // frames in one tick can fire before the listener is attached.
+    this.pending = new Map();
     this.queue = [];
     const u = new URL(BASE);
     u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
     u.pathname = '/ws';
     this.ws = new WebSocket(u.href, { perMessageDeflate: false });
-    this.ws.on('error', () => {}); // 连接异常时静默，由上层等待超时兜底
+    this.ws.on('error', () => {}); // stay silent; caller timeouts handle failures
     this.ws.on('open', () => { while (this.queue.length) this.ws.send(this.queue.shift()); });
     this.ws.on('message', (data) => {
       let m;
@@ -79,7 +78,7 @@ class Bot {
     this.name = name;
     this.posId = -1;
     this.deskId = -1;
-    this.hostPos = -1; // 主持模式：当前主持人座位号（首坐者，权限不转移；常监听 HOST_CHANGE 维护）
+    this.hostPos = -1; // host seat (first sitter, never transfers), kept via HOST_CHANGE
     this.hand = [];
     this.gameOver = null;
     this.forceExit = null;
@@ -90,15 +89,16 @@ class Bot {
     this.socket = connect();
     this.socket.on('GAME_OVER', (d) => { this.gameOver = d; });
     this.socket.on('FORCE_EXIT_EV', (d) => { this.forceExit = d; });
-    // 常监听（非动态 on/off）：主持权授予/复位都据此更新，不吃 pending
+    // Permanent listener (not dynamic on/off) so it never consumes pending.
     this.socket.on('HOST_CHANGE', (d) => {
       if (d && typeof d.posId === 'number') this.hostPos = d.posId;
     });
   }
   emit(ev, data) { this.socket.emit(ev, data); }
-  // wait 先消费暂存事件（同一 tick 背靠背多帧时，监听器可能晚于帧注册），
-  // 否则挂一次性监听。动态 on/off（tryPlay）不得消费暂存——
-  // 其响应永远晚于自己的 emit，误消费旧响应会造成幽灵完成。
+  // wait() drains pending first (frames may arrive before the listener is
+    // attached). Dynamic on/off handlers (tryPlay) must NOT consume pending —
+    // their response always arrives after their own emit; consuming a stale
+    // one would cause ghost completions.
   wait(ev, timeout = 5000) {
     const buf = this.socket.pending.get(ev);
     if (buf && buf.length) {
@@ -123,18 +123,17 @@ class Bot {
       `${this.name} SITDOWN_SUCCESS`);
     this.posId = posId;
     this.deskId = deskId;
-    // 首坐者会随后收到 HOST_CHANGE 常监听帧更新 hostPos；后坐者直接从回帧拿当前主持位
+    // First sitter gets hostPos via HOST_CHANGE; others read it from the reply.
     if (typeof d.hostPosId === 'number' && d.hostPosId !== -1) this.hostPos = d.hostPosId;
   }
   async prepare() {
     this.emit('PREPARE');
-    await this.wait('PREPARE_SUCCESS', 10000); // 等全桌准备后一起收到 GAME_START
   }
-  // 重连后驱动监听挂在旧 socket 上，需由调用方重新 attach
+  // Driver listeners live on the old socket after reconnect; caller re-attaches.
   async reconnect() {
     this.connect();
     this.gameOver = null;
-    this.awaitReplayStart = true; // RECONNECT 后紧跟的 GAME_START 是当前手牌重放帧
+    this.awaitReplayStart = true; // GAME_START right after RECONNECT is a hand replay
     this.emit('LOGIN', this.name);
     const rec = await this.wait('RECONNECT', 8000);
     check(rec.deskId === this.deskId && rec.posId === this.posId && rec.posInfos.length === 8,
@@ -144,7 +143,7 @@ class Bot {
   }
   takeCards(cards, replay = false) {
     const mine = cards.find((g) => g.id === this.posId);
-    // 重连重放帧是当前手牌（可不足开局张数），仅开局帧校验 40/41
+    // Replay frames hold the current hand (may be short); only opening frames check 40/41.
     check(mine && (replay ? mine.cards.length >= 1 : (mine.cards.length === 40 || mine.cards.length === 41)),
       `${this.name} 手牌 ${mine ? mine.cards.length : 0} 张`);
     this.hand = mine.cards.slice();
@@ -160,14 +159,15 @@ class Bot {
     moveBudget.use();
     await this.tryPlay([]);
   }
-  // 服务器对每次 PLAY_CARD 必回其一（SUCCESS/ERROR 单发，出牌另有广播），故不设超时——
-  // 拥堵时帧晚到若被超时误判"失败"，客户端手牌会与服务器脱同步（场景 D 曾因此偶发 FAIL）；
-  // 真死锁由对局级 hardStop 兜底。
+  // Iron rule: no timeout here — the server always answers each PLAY_CARD
+  // with SUCCESS or ERROR; a late frame misjudged as failure by a timeout
+  // desyncs the client hand (once caused flaky scenario D failures). Real
+  // deadlocks are caught by the game-level hardStop.
   tryPlay(cards) {
     return new Promise((resolve) => {
       const done = (v) => { cleanup(); resolve(v); };
-      const onError = () => done(false);                       // 牌不合规 → 试下一张
-      const onOk = () => done(true);                            // 出牌成功
+      const onError = () => done(false); // invalid card → try the next one
+      const onOk = () => done(true);
       const onCtx = (d) => { if (d.ctxData.posId === this.posId && !d.isPass) done(true); };
       const cleanup = () => {
         this.socket.off('PLAY_CARD_ERROR', onError);
@@ -189,7 +189,7 @@ function moveBudget(n) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 每次运行随机选一张桌，避免上一轮死局/保留座位残留（600s）占死固定桌号
+// Random table each run: leftover reserved seats (600s) can clog a fixed table.
 const DESK = 1 + Math.floor(Math.random() * 20);
 async function spawnBots(prefix) {
   const bots = [];
@@ -202,17 +202,17 @@ async function spawnBots(prefix) {
   return bots;
 }
 
-// 主持模式：全员 PREPARE 后服务器不再自动开局，由主持人（首坐者，权限不转移）发 HOST_START_GAME。
-// 须先等全员 PREPARE_SUCCESS 再开牌：各 bot 的 PREPARE 与主持人的 HOST_START_GAME 跨连接并发，
-// 服务器可能先处理到开牌请求（此时还有人未准备）而拒绝（曾致场景 A/D 偶发超时）。
+// Host mode: the host (first sitter, non-transferable) sends HOST_START_GAME
+// after everyone is ready. Always wait for all PREPARE_SUCCESS first — the
+// server may otherwise see the start request before someone's PREPARE and
+// reject it (once caused flaky A/D timeouts).
 async function hostStart(bots) {
   const host = bots.find((b) => b.hostPos === b.posId);
   if (!host) throw new Error('未找到主持人（HOST_CHANGE 跟踪缺失）');
   host.emit('HOST_START_GAME');
 }
 
-// attachDriver 挂载完整对局驱动（叫分 + 出牌 + 终局）。
-// 返回 { finished, failure, settle }；重连后对同一 bot 可再次调用（监听挂在新 socket 上）。
+// attachDriver mounts the full game driver; re-callable per bot after reconnect.
 function attachDriver(bots, budget) {
   let failure = null;
   let settle;
@@ -227,8 +227,9 @@ function attachDriver(bots, budget) {
     b.myTurn = false;
     b.busy = false;
     const onStart = (d) => { b.takeCards(d.cards, b.awaitReplayStart); b.awaitReplayStart = false; };
-    // 出牌驱动：纯 WS 下背靠背多帧可能在同一 tick 派发，直接在回调里 takeTurn
-    // 会重入。改为记录"是否轮到我"，同一时间只允许一个 takeTurn 在飞，结束后复查。
+    // Back-to-back frames may dispatch in one tick; calling takeTurn directly
+    // from the callback would re-enter. Track myTurn and allow one takeTurn in
+    // flight, re-checking when it finishes.
     const playIfTurn = async () => {
       while (b.myTurn) {
         b.busy = true;
@@ -252,8 +253,9 @@ function attachDriver(bots, budget) {
     b.socket.on('GAME_START', onStart);
     b.socket.on('CTX_PLAY_CHANGE', onCtx);
     b.socket.on('GAME_OVER', onOver);
-    // 常驻驱动补吃 attach 前入 pending 的帧（断线重连：服务器重放帧可能先于
-    // 重挂监听到达）。动态 on/off（tryPlay）依然绝不消费 pending——不变。
+    // The permanent driver drains frames that entered pending before attach
+    // (reconnect replays can beat listener re-attachment). Dynamic on/off
+    // (tryPlay) still never consumes pending.
     for (const [ev, fn] of [['GAME_START', onStart], ['CTX_PLAY_CHANGE', onCtx]]) {
       const buf = b.socket.pending.get(ev) || [];
       while (buf.length) fn(buf.shift());
@@ -263,7 +265,7 @@ function attachDriver(bots, budget) {
   return { finished, failure: () => failure, attach };
 }
 
-// 场景 A：完整牌局
+// Scenario A: full game
 async function scenarioFullGame() {
   console.log('场景 A：8 人完整牌局');
   const bots = await spawnBots('A');
@@ -272,7 +274,7 @@ async function scenarioFullGame() {
 
   for (const b of bots) b.emit('PREPARE');
   await Promise.all(bots.map((b) => b.wait('PREPARE_SUCCESS', 10000)));
-  await hostStart(bots); // 主持模式：全员准备好后由主持人开牌
+  await hostStart(bots);
   const starter = await Promise.race(bots.map((b) => b.wait('GAME_START', 15000)));
   check(starter && Array.isArray(starter.cards) && starter.cards.length === 8, 'GAME_START 8 家手牌齐全');
   const total = starter.cards.reduce((s, g) => s + g.cards.length, 0);
@@ -284,7 +286,7 @@ async function scenarioFullGame() {
   await drv.finished;
   if (drv.failure()) throw drv.failure();
 
-  // GAME_OVER 是广播，但各客户端到达有先后；等全员收齐再断言
+  // GAME_OVER is a broadcast that arrives per-client at different times; wait for all.
   await Promise.all(bots.map((b) => (b.gameOver ? Promise.resolve() :
     Promise.race([new Promise((res) => b.socket.once('GAME_OVER', res)), sleep(5000)]))));
 
@@ -294,7 +296,7 @@ async function scenarioFullGame() {
   bots.forEach((b) => b.socket.close());
 }
 
-// 场景 B：游戏中掉线 → 保留 → 重连超时判逃跑
+// Scenario B: disconnect mid-game → reserved → escape on timeout
 async function scenarioEscape() {
   console.log('场景 B：游戏中掉线超时判逃跑');
   const bots = await spawnBots('B');
@@ -303,10 +305,11 @@ async function scenarioEscape() {
   await hostStart(bots);
   await Promise.race(bots.map((b) => b.wait('CTX_PLAY_CHANGE', 20000)));
 
-  bots[3].socket.close(); // 3 号掉线
+  bots[3].socket.close(); // seat 3 disconnects
   const others = bots.filter((_, i) => i !== 3);
 
-  // 掉线后短期内对局应保留（不立即终止）；检测窗口须小于服务端 reconnect-timeout
+  // The game must stay reserved (not terminate) shortly after the drop;
+    // the probe window must stay below the server reconnect-timeout.
   let early = false;
   const probes = others.map((b) => {
     const fn = () => { early = true; };
@@ -317,9 +320,10 @@ async function scenarioEscape() {
   probes.forEach(({ b, fn }) => b.socket.off('FORCE_EXIT_EV', fn));
   check(!early, '掉线后对局保留（未立即终止）');
 
-  // 终止路径：短超时服务器由 B3 超时判逃触发；长超时服务器等不到则由他人
-  // 主动退出（UNSITDOWN，同样走逃跑终止），保证场景可收尾、座位可释放。
-  // 注意主动退出者自身已出房、收不到 FORCE_EXIT，等待对象不含退出者。
+  // Termination path: with a short timeout B3 escaping triggers it; on a long
+  // -timeout server, another player manually quits (UNSITDOWN, also an escape
+  // termination) so the scenario always wraps up. The quitter has already left
+  // and gets no FORCE_EXIT, so it's excluded from the waiters.
   const quitter = others[0];
   const rest = others.slice(1);
   const exited = Promise.all(rest.map((b) => b.wait('FORCE_EXIT_EV', 15000)));
@@ -333,13 +337,13 @@ async function scenarioEscape() {
   others.forEach((b) => b.socket.close());
 }
 
-// 场景 C：大厅（用户名登录校验/重名/占座/快速加入）
+// Scenario C: lobby (login validation/dup names/seat takeover/quick join)
 async function scenarioLobby() {
   console.log('场景 C：大厅');
   const a = new Bot('dup');
   await a.login();
 
-  // 登录校验：非空 / ≤10 字 / 不与在线重名
+  // Login validation: non-empty, ≤10 chars, not an online duplicate.
   const r = connect();
   r.emit('LOGIN', '');
   const ef = await waitEvent(r, 'LOGIN_FAIL');
@@ -371,7 +375,7 @@ async function scenarioLobby() {
   c.socket.close();
 }
 
-// 场景 D：断线重连续局
+// Scenario D: disconnect and reconnect, game resumes
 async function scenarioReconnect() {
   console.log('场景 D：断线重连续局');
   const bots = await spawnBots('D');
@@ -381,24 +385,26 @@ async function scenarioReconnect() {
   for (const b of bots) b.emit('PREPARE');
   await Promise.all(bots.map((b) => b.wait('PREPARE_SUCCESS', 10000)));
   await hostStart(bots);
-  // 等全员都拿到手牌（只 race 一个会在部分 bot 尚未处理 GAME_START 时就继续）
+  // Wait until ALL bots have hands (racing one would continue too early).
   await Promise.all(bots.map((b) => b.wait('GAME_START', 15000)));
-  // 等首手出牌后再掉线（保证处于出牌阶段）
+  // Drop only after the first play (ensures the play phase is active).
   await Promise.race(bots.map((b) => b.wait('CTX_PLAY_CHANGE', 20000)));
 
   const victim = bots[5];
   if (!victim.hand.length) throw new Error('victim 未拿到手牌');
-  // 等 victim 空闲（不轮到、无在飞出牌）再断线，避免掉线瞬间的出牌竞态
+  // Wait until the victim is idle (not their turn, nothing in flight) to avoid
+    // a play race at the moment of disconnection.
   for (let i = 0; i < 200 && (victim.myTurn || victim.busy); i++) await sleep(50);
   if (victim.myTurn || victim.busy) throw new Error('victim 未能进入空闲状态');
   const handSig = (h) => h.map((c) => c.value * 4 + c.type).sort().join(',');
   const before = handSig(victim.hand);
   victim.socket.close();
-  await sleep(400); // 等服务端处理断开
+  await sleep(400); // let the server process the disconnect
 
   await victim.reconnect();
-  // RECONNECT 后服务器必发 GAME_START 重放帧；两帧可能分属不同事件循环批次，
-  // 直接读 pending 会偶发扑空，须显式等待
+  // Iron rule: after RECONNECT always wait('GAME_START') explicitly — the two
+  // frames may land in different event-loop ticks and a direct pending read
+  // can miss the replay.
   const gs = await victim.wait('GAME_START', 5000).catch(() => null);
   const mine = gs && gs.cards.find((g) => g.id === victim.posId);
   if (mine) {
@@ -411,8 +417,8 @@ async function scenarioReconnect() {
   }
   check(mine && handSig(mine.cards) === before, `${victim.name} 重连重放手牌与掉线前一致`);
 
-  if (mine) victim.takeCards(gs.cards, true); // 以服务器手牌为准对齐（掉线瞬间若有在飞出牌，消除脱同步）
-  // 重连前驱动监听挂在旧 socket 上，需重新 attach（含补吃 attach 前到达的重放帧）
+  if (mine) victim.takeCards(gs.cards, true); // align with the server hand (drops any in-flight play)
+  // Re-attach the driver (drains replay frames that arrived before attach).
   drv.attach(victim);
 
   await drv.finished;
@@ -423,11 +429,11 @@ async function scenarioReconnect() {
   bots.forEach((b) => b.socket.close());
 }
 
-// 场景 E：历史战绩
+// Scenario E: history
 async function scenarioHistory() {
   console.log('场景 E：历史战绩');
   const a = new Bot('A0');
-  await a.login(); // 场景 A 已打过一局
+  await a.login(); // scenario A already played a game
   a.emit('HISTORY_LIST', { page: 1 });
   const list = await a.wait('HISTORY_LIST');
   check(list.total >= 1 && Array.isArray(list.list) && list.list.length >= 1,
@@ -460,25 +466,25 @@ async function scenarioHistory() {
   b3.socket.close();
 }
 
-// 场景 F：人机模式（主持人开牌时空位填充机器人，单人练习一整局）
+// Scenario F: bot-fill mode (empty seats filled with server bots).
 async function scenarioBotFill() {
   console.log('场景 F：人机模式（单人 + 7 机器人）');
   const human = new Bot('F0');
   await human.login();
-  await human.sit(DESK, 3); // 首坐者即主持人
+  await human.sit(DESK, 3); // first sitter = host
   human.emit('PREPARE');
   await human.wait('PREPARE_SUCCESS', 10000);
 
-  // 有空位但不确认填充：服务器拒绝并提示，不开局
+  // Empty seats without fill confirmation: server refuses with a MESSAGE.
   human.emit('HOST_START_GAME');
   const deny = await human.wait('MESSAGE');
   check(deny && /空位/.test(deny.msg), `不确认填充被拒（${deny.msg}）`);
 
-  // 确认填充：7 个机器人入座（POS_STATUS_CHANGE 带 isBot）后开局
+  // Confirmed fill: 7 bots sit down (POS_STATUS_CHANGE with isBot) and the game starts.
   const botSeats = [];
   human.socket.on('POS_STATUS_CHANGE', (d) => { if (d.isBot) botSeats.push(d); });
   const budget = moveBudget(12000);
-  const drv = attachDriver([human], budget); // 机器人由服务器驱动，只需驱动真人座位
+  const drv = attachDriver([human], budget); // only the human seat needs driving
   human.emit('HOST_START_GAME', { fillBots: true });
   const starter = await human.wait('GAME_START', 15000);
   check(starter && starter.cards.length === 8, '人机局 GAME_START 8 家手牌齐全');
@@ -490,7 +496,7 @@ async function scenarioBotFill() {
   if (drv.failure()) throw drv.failure();
   check(human.gameOver && human.gameOver.winner.length === 4, '人机局正常 GAME_OVER');
 
-  // 终局机器人座位清理：等待收尾 POS_STATUS_CHANGE(state=0)
+  // Wait for the bot-seat cleanup frames (POS_STATUS_CHANGE state=0).
   await sleep(500);
   human.emit('HISTORY_LIST', { page: 1 });
   const hlist = await human.wait('HISTORY_LIST');
@@ -508,8 +514,8 @@ if (require.main === module) (async () => {
     await scenarioHistory();
     await scenarioBotFill();
     console.log(failed ? '\nE2E: 存在失败项' : '\nE2E: 全部通过');
-    // ws.close() 的关闭帧为异步发送；稍等一拍再退出，确保服务器收到
-    // 断开并清理座位，避免殃及下一轮验收
+    // ws.close() sends the close frame asynchronously; wait a beat before
+    // exiting so the server registers the disconnect and frees the seats.
     await sleep(150);
     process.exit(failed ? 1 : 0);
   } catch (e) {
@@ -518,5 +524,5 @@ if (require.main === module) (async () => {
   }
 })();
 
-// 供 e2e-audit.js 等复用（require 时不执行上面的场景）
+// Exports for e2e-audit.js etc.; requiring does not run the scenarios.
 module.exports = { WsClient, Bot, connect, check, sleep, moveBudget, spawnBots, attachDriver, waitEvent, BASE };

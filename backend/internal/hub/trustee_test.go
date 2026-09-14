@@ -1,5 +1,4 @@
-// trustee_test.go 托管功能测试：对局中手动开关、托管中拒绝手动操作、
-// 断线超时自动托管续局、全部真实玩家超时直接中止。
+// Trustee tests.
 package hub
 
 import (
@@ -10,7 +9,7 @@ import (
 	"talkcards/backend/internal/store"
 )
 
-// newTrusteeHub 建好测试 hub：1ms 机器人延迟、极短重连超时
+// newTrusteeHub: 1ms bot delay, 20ms reconnect timeout.
 func newTrusteeHub(t *testing.T) *Hub {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "trustee.db"))
@@ -23,7 +22,7 @@ func newTrusteeHub(t *testing.T) *Hub {
 	return h
 }
 
-// waitGameOver 轮询至对局结束（正常终局或终止复位后 Game 不在进行中）
+// waitGameOver: poll until the game ends.
 func waitGameOver(t *testing.T, h *Hub, deskID int) {
 	t.Helper()
 	d := h.lobby.Desk(deskID)
@@ -40,7 +39,7 @@ func waitGameOver(t *testing.T, h *Hub, deskID int) {
 	t.Fatalf("60s 未终局")
 }
 
-// waitEventIn 等待 frames[from:] 中出现指定事件（pump 异步投递，需轮询）
+// waitEventIn: wait for an event in frames[from:] (async pump — poll).
 func waitEventIn(t *testing.T, f *fakeConn, event string, from int) bool {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -55,7 +54,7 @@ func waitEventIn(t *testing.T, f *fakeConn, event string, from int) bool {
 	return false
 }
 
-// TestToggleTrusteeOnlyInGame 未开局时托管应被拒绝（只有对局中才能托管）
+// TestToggleTrusteeOnlyInGame: rejected before the game starts.
 func TestToggleTrusteeOnlyInGame(t *testing.T) {
 	h := newTrusteeHub(t)
 	c0 := &fakeConn{id: "c0"}
@@ -73,8 +72,8 @@ func TestToggleTrusteeOnlyInGame(t *testing.T) {
 	}
 }
 
-// TestTrusteeManualFullGame 对局中手动托管：机器人代打整局直至终局，
-// 托管中手动操作被拒，终局后托管标记清除
+// TestTrusteeManualFullGame: system plays the whole game; manual plays
+// rejected while trusted; flag cleared at game end.
 func TestTrusteeManualFullGame(t *testing.T) {
 	h := newTrusteeHub(t)
 	c0 := &fakeConn{id: "c0"}
@@ -89,7 +88,6 @@ func TestTrusteeManualFullGame(t *testing.T) {
 		t.Fatalf("开局不应自动托管")
 	}
 
-	// 叫分阶段先托管：系统代打叫分
 	before := len(c0.snapshot())
 	h.onToggleTrustee(c0)
 	if !d.Seat(3).Trustee {
@@ -99,7 +97,7 @@ func TestTrusteeManualFullGame(t *testing.T) {
 		t.Fatalf("应广播 TRUSTEE_CHANGE")
 	}
 
-	// 托管中手动出牌被拒（MESSAGE，不进牌局状态机；pump 异步投递需轮询）
+	// Manual play while trusted is rejected (async pump — poll).
 	before2 := len(c0.snapshot())
 	h.onPlayCard(c0, nil)
 	deadline := time.Now().Add(3 * time.Second)
@@ -124,12 +122,11 @@ rejected:
 	}
 }
 
-// TestReconnectTimeoutTrusteeContinues 断线超时自动托管：
-// 还有别的真人在线 → 对局继续（不终止）；全部真实玩家超时 → 直接中止
+// TestReconnectTimeoutTrusteeContinues: timeout with another human online →
+// trustee and continue; all humans timed out → terminated.
 func TestReconnectTimeoutTrusteeContinues(t *testing.T) {
 	h := newTrusteeHub(t)
 
-	// 两个真人（座 3、座 5），其余机器人
 	c0 := &fakeConn{id: "c0"}
 	h.onLogin(c0, "host")
 	h.onSitdown(c0, sitdownReq{DeskID: 1, PosID: 3})
@@ -143,7 +140,6 @@ func TestReconnectTimeoutTrusteeContinues(t *testing.T) {
 
 	d := h.lobby.Desk(1)
 
-	// guest 掉线：座位保留 + 重连倒计时
 	h.onDisconnect(c1)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -152,12 +148,12 @@ func TestReconnectTimeoutTrusteeContinues(t *testing.T) {
 		inProg := d.GameInProgress()
 		h.mu.Unlock()
 		if held && !inProg {
-			break // 超时触发后：无真人在线 → 已终止
+			break // after the timeout: no human online → already terminated
 		}
 		time.Sleep(time.Millisecond)
 	}
 
-	// guest 超时后：仅剩 host 一个真人在线 → 转托管、对局继续
+	// Timed out but host online → trustee, game continues.
 	h.mu.Lock()
 	inProg := d.GameInProgress()
 	trustee := d.Seat(5).Trustee
@@ -173,12 +169,12 @@ func TestReconnectTimeoutTrusteeContinues(t *testing.T) {
 		t.Fatalf("超时托管后应保留重连记录（可随时重连接管）")
 	}
 
-	// host 也掉线超时：全部真实玩家不在 → 对局直接中止
+	// host times out too → terminate.
 	h.onDisconnect(c0)
 	waitGameOver(t, h, 1)
 }
 
-// TestTrusteeReconnectCancel 断线超时托管后重连：自动取消托管、恢复手动
+// TestTrusteeReconnectCancel: reconnect cancels timeout auto-trustee.
 func TestTrusteeReconnectCancel(t *testing.T) {
 	h := newTrusteeHub(t)
 
@@ -196,7 +192,6 @@ func TestTrusteeReconnectCancel(t *testing.T) {
 	d := h.lobby.Desk(1)
 	h.onDisconnect(c1)
 
-	// 等 guest 超时转托管
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		h.mu.Lock()
@@ -214,7 +209,7 @@ func TestTrusteeReconnectCancel(t *testing.T) {
 	}
 	h.mu.Unlock()
 
-	// guest 重连：坐回原座、托管取消
+	// Reconnect: back to the original seat, trusteeship cancelled.
 	c2 := &fakeConn{id: "c2"}
 	h.onLogin(c2, "guest")
 	waitFrame(t, c2, EvReconnect, 1)

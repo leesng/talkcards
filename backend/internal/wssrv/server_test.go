@@ -18,7 +18,7 @@ import (
 var quietLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func TestMarshalEnvelope(t *testing.T) {
-	// 无载荷事件：data 字段缺省
+	// no-payload event: data field omitted
 	b, err := marshalEnvelope("PREPARE", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +27,7 @@ func TestMarshalEnvelope(t *testing.T) {
 		t.Fatalf("无载荷信封 = %s, want %s", b, want)
 	}
 
-	// 字符串载荷（LOGIN）
+	// string payload (LOGIN)
 	b, _ = marshalEnvelope("LOGIN", "玩家一")
 	var env envelope
 	if err := json.Unmarshal(b, &env); err != nil {
@@ -37,14 +37,13 @@ func TestMarshalEnvelope(t *testing.T) {
 		t.Fatalf("字符串载荷信封 = %s", b)
 	}
 
-	// 对象载荷
+	// object payload
 	b, _ = marshalEnvelope("SITDOWN", map[string]int{"deskId": 3, "posId": 7})
 	if !strings.Contains(string(b), `"deskId":3`) || !strings.Contains(string(b), `"posId":7`) {
 		t.Fatalf("对象载荷信封 = %s", b)
 	}
 }
 
-// waitEvent 收集一次服务端下行事件
 func waitEvent(t *testing.T, c *websocket.Conn) envelope {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -93,7 +92,7 @@ func TestServeLifecycle(t *testing.T) {
 		mu.Lock()
 		gotSit = string(data)
 		mu.Unlock()
-		c.Emit("PREPARE", nil) // 无载荷事件
+		c.Emit("PREPARE", nil)
 	})
 	srv.OnDisconnect(func(Conn) {
 		mu.Lock()
@@ -108,7 +107,6 @@ func TestServeLifecycle(t *testing.T) {
 	c := dial(t, url)
 	defer c.CloseNow()
 
-	// 中文载荷上行
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := c.Write(ctx, websocket.MessageText, []byte(`{"type":"LOGIN","data":"张三"}`)); err != nil {
@@ -119,7 +117,6 @@ func TestServeLifecycle(t *testing.T) {
 		t.Fatalf("LOGIN_SUCCESS 信封 = %+v", env)
 	}
 
-	// 对象载荷上行
 	if err := c.Write(ctx, websocket.MessageText, []byte(`{"type":"SITDOWN","data":{"deskId":1,"posId":2}}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +125,7 @@ func TestServeLifecycle(t *testing.T) {
 		t.Fatalf("无载荷信封 = %+v", env)
 	}
 
-	// 优雅关闭 → OnDisconnect 恰好一次
+	// graceful close must trigger OnDisconnect exactly once
 	if err := c.Close(websocket.StatusNormalClosure, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +149,8 @@ func TestServeLifecycle(t *testing.T) {
 	}
 }
 
-// 异常断开（不发关闭帧，模拟杀进程/断网）也应即时触发 OnDisconnect
+// TestAbruptDisconnect: dropping TCP without a close frame (kill / network
+// loss) must still trigger OnDisconnect promptly.
 func TestAbruptDisconnect(t *testing.T) {
 	srv := New(quietLogger)
 	done := make(chan struct{})
@@ -170,7 +168,7 @@ func TestAbruptDisconnect(t *testing.T) {
 	}
 	waitEvent(t, c)
 
-	c.CloseNow() // 直接断 TCP，无关闭帧
+	c.CloseNow() // raw TCP drop, no close frame
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
@@ -178,7 +176,7 @@ func TestAbruptDisconnect(t *testing.T) {
 	}
 }
 
-// 未注册事件与非法信封不致断连
+// TestMalformedIgnored: unregistered events and malformed envelopes must not disconnect.
 func TestMalformedIgnored(t *testing.T) {
 	srv := New(quietLogger)
 	srv.OnEvent("OK", func(c Conn, _ json.RawMessage) { c.Emit("OK", nil) })

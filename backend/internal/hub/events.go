@@ -1,5 +1,4 @@
-// events.go Socket.IO 事件契约：事件名与 payload 字段名必须与 static/index.html 中
-// 前端消费的字段逐字一致，改动前先对照前端代码。
+// events.go: event contract — names and payload fields must match static/index.html verbatim.
 package hub
 
 import (
@@ -8,7 +7,7 @@ import (
 	"talkcards/backend/internal/table"
 )
 
-// 入站事件
+// Inbound events.
 const (
 	EvLogin         = "LOGIN"
 	EvQuickJoin     = "QUICK_JOIN"
@@ -16,15 +15,15 @@ const (
 	EvUnsitdown     = "UNSITDOWN"
 	EvPrepare       = "PREPARE"
 	EvCancelPrepare = "CANCEL_PREPARE"
-	EvHostStartGame = "HOST_START_GAME" // 主持人开牌（全员已准备后由主持人触发开局）
+	EvHostStartGame = "HOST_START_GAME" // host starts once everyone is ready
 	EvPlayCard      = "PLAY_CARD"
 	EvUserMessage   = "USER_MESSAGE"
 	EvHistoryList   = "HISTORY_LIST"
 	EvHistoryDetail = "HISTORY_DETAIL"
-	EvToggleTrustee = "TOGGLE_TRUSTEE" // 托管开关（仅对局中生效；出牌规则与机器人一致）
+	EvToggleTrustee = "TOGGLE_TRUSTEE" // in-game only
 )
 
-// 出站事件
+// Outbound events.
 const (
 	EvLoginSuccess         = "LOGIN_SUCCESS"
 	EvLoginFail            = "LOGIN_FAIL"
@@ -52,19 +51,16 @@ const (
 	EvGameOver             = "GAME_OVER"
 	EvMessage              = "MESSAGE"
 	EvUserMessageOut       = "USER_MESSAGE"
-	EvHostChange           = "HOST_CHANGE"    // 主持权变更（空桌首坐授予 / 主持人离桌顺延 / 全桌清空复位）
-	EvTrusteeChange        = "TRUSTEE_CHANGE" // 托管状态变更（手动开关 / 断线超时自动托管 / 重连取消托管）
+	EvHostChange           = "HOST_CHANGE"    // first sit / host leaves / desk emptied
+	EvTrusteeChange        = "TRUSTEE_CHANGE" // manual toggle / timeout auto / reconnect cancel
 )
-
-// 座位/牌桌 wire 结构见 internal/table（Seat/Desk 直接序列化，字段与前端逐字一致）
 
 type sitdownReq struct {
 	DeskID int `json:"deskId"`
 	PosID  int `json:"posId"`
 }
 
-// historyListReq HISTORY_LIST 载荷（page 从 1 起，0 视为 1）
-type historyListReq struct {
+type historyListReq struct { // page starts at 1; 0 treated as 1
 	Page int `json:"page"`
 }
 
@@ -72,22 +68,19 @@ type historyDetailReq struct {
 	GameID int64 `json:"gameId"`
 }
 
-// reconnectPayload RECONNECT：客户端据此回到房间界面（字段兼容 SITDOWN_SUCCESS）
-type reconnectPayload struct {
+type reconnectPayload struct { // fields compatible with SITDOWN_SUCCESS
 	DeskID    int          `json:"deskId"`
 	PosID     int          `json:"posId"`
 	PosInfo   []table.Seat `json:"posInfos"`
-	HostPosID int          `json:"hostPosId"` // 当前主持人座位号；-1=无
+	HostPosID int          `json:"hostPosId"` // -1 = no host
 }
 
-// historyListOut HISTORY_LIST 出站
 type historyListOut struct {
 	List  []store.HistoryItem `json:"list"`
 	Total int                 `json:"total"`
 	Page  int                 `json:"page"`
 }
 
-// historyDetailOut HISTORY_DETAIL 出站
 type historyDetailOut struct {
 	GameID     int64              `json:"gameId"`
 	DeskID     int                `json:"deskId"`
@@ -95,14 +88,12 @@ type historyDetailOut struct {
 	EndedAt    string             `json:"endedAt"`
 	EndReason  string             `json:"endReason"`
 	Winner     []int              `json:"winner"`
-	Team0Score int                `json:"team0Score"` // 偶数队最终得分
-	Team1Score int                `json:"team1Score"` // 奇数队最终得分
+	Team0Score int                `json:"team0Score"` // even-team final score
+	Team1Score int                `json:"team1Score"` // odd-team final score
 	Players    []store.GamePlayer `json:"players"`
 }
 
-// hostStartGameReq HOST_START_GAME 载荷（可缺省）：fillBots=true 表示主持人确认
-// 将空位填充为机器人开局（人机模式/单人练习）
-type hostStartGameReq struct {
+type hostStartGameReq struct { // payload may be omitted entirely
 	FillBots bool `json:"fillBots"`
 }
 
@@ -110,8 +101,7 @@ type msgPayload struct {
 	Msg string `json:"msg"`
 }
 
-// quickJoinResult 成功时三字段齐全；失败时仅 success（对应 js 两种不同字面量）
-type quickJoinResult struct {
+type quickJoinResult struct { // success: all fields; failure: only success (js literals)
 	DeskID  int  `json:"deskId"`
 	PosID   int  `json:"posId"`
 	Success bool `json:"success"`
@@ -129,34 +119,28 @@ type sitdownSuccess struct {
 	DeskID    int          `json:"deskId"`
 	PosID     int          `json:"posId"`
 	PosInfo   []table.Seat `json:"posInfos"`
-	HostPosID int          `json:"hostPosId"` // 坐下后的主持人座位号（可能是自己）
+	HostPosID int          `json:"hostPosId"` // may be oneself
 }
 
-// trusteeChange TRUSTEE_CHANGE：托管状态变更广播；trustee=true 表示该座位
-// 托管中（由服务器按机器人策略代打），false 表示已恢复手动
-type trusteeChange struct {
+type trusteeChange struct { // trustee=true: server plays the seat with the bot strategy
 	PosID    int    `json:"posId"`
 	Trustee  bool   `json:"trustee"`
-	UserName string `json:"userName,omitempty"` // 断线超时自动托管时附带，便于前端提示
+	UserName string `json:"userName,omitempty"` // attached on timeout auto-trustee
 }
 
-// hostChange HOST_CHANGE：主持权授予/顺延/复位；posId=-1 表示本桌已无主持人
-type hostChange struct {
+type hostChange struct { // posId=-1: desk has no host
 	PosID    int    `json:"posId"`
 	UserName string `json:"userName"`
 }
 
-// houseStatusChange STATUS_CHANGE：userName 恒存在（离开时为 ""，前端用于清名）
-type houseStatusChange struct {
+type houseStatusChange struct { // userName always present ("" on leave)
 	DeskID   int    `json:"deskId"`
 	PosID    int    `json:"posId"`
 	State    int    `json:"state"`
 	UserName string `json:"userName"`
 }
 
-// posStatusChange POS_STATUS_CHANGE：userName 可缺省（准备/离开时不带）；
-// isBot 标识人机模式填充的机器人座位（前端渲染机器人角标）
-type posStatusChange struct {
+type posStatusChange struct { // isBot marks bot seats (frontend bot badge)
 	PosID    int    `json:"posId"`
 	State    int    `json:"state"`
 	UserName string `json:"userName,omitempty"`
@@ -177,9 +161,7 @@ type forceExitPayload struct {
 	PosID int    `json:"posId"`
 }
 
-// userMessage USER_MESSAGE 广播。
-// js 中 id 为 guid() 返回的函数、被 JSON.stringify 丢弃；这里改为自增整数（前端仅作 v-for key）
-type userMessage struct {
+type userMessage struct { // js id was a guid() dropped by stringify; here an int (v-for key only)
 	Type  string `json:"type"`
 	PosID int    `json:"posId"`
 	Msg   string `json:"msg"`
@@ -187,19 +169,16 @@ type userMessage struct {
 	Time  string `json:"time"`
 }
 
-// handGroup 一家手牌的 wire 形态（GAME_START）：id/cards/ht 与前端逐字一致；
-// HT 为红桃统计（大小王 type=0 也计入），是前端展示需求，故留在 wire 层
-type handGroup struct {
+type handGroup struct { // HT: hearts tally incl. jokers (type=0), frontend display need
 	ID    int         `json:"id"`
 	Cards []card.Card `json:"cards"`
 	HT    [15]int     `json:"ht"`
 }
 
 type gameStartPayload struct {
-	Cards []handGroup `json:"cards"` // 注意：js 将 8 家手牌全部广播（前端亮牌/剩余张数依赖此行为）
+	Cards []handGroup `json:"cards"` // bug-for-bug: all 8 hands broadcast (frontend relies on it)
 }
 
-// gameOverPayload GAME_OVER 出站
 type gameOverPayload struct {
 	Winner []int `json:"winner"`
 	Loser  []int `json:"loser"`
@@ -213,8 +192,7 @@ type showTopCard struct {
 	Timeout    int         `json:"timeout"`
 }
 
-// ctxPlayCtx Key/Type 用 any 对齐 js：初牌为 ""，正常出牌为数值/字符串，过牌时省略
-type ctxPlayCtx struct {
+type ctxPlayCtx struct { // Key/Type: any to match js — "" on lead, value on play, omitted on pass
 	Len   int         `json:"len"`
 	Key   interface{} `json:"key,omitempty"`
 	Type  interface{} `json:"type,omitempty"`
@@ -229,16 +207,15 @@ type ctxPlayChange struct {
 	PosID   int            `json:"posId"`
 	Timeout int            `json:"timeout"`
 	IsPass  bool           `json:"isPass"`
-	// Replay 断线重连的历史重放帧：手牌已由 GAME_START 给出最新快照，
-	// 客户端不得据此帧再扣手牌（6 副牌同值同花色重复，误扣即脱同步）。
+	// Replay: reconnect replay frame — GAME_START already has the latest
+	// hand; deducting cards here desyncs (6 decks have duplicate cards).
 	Replay bool `json:"replay,omitempty"`
-	// Clear 该帧之后桌面已清空（一圈收分/出完接风，轮到者自由领出新圈）：
-	// 客户端应清空各家出牌区与"要压的牌型"，否则上一圈的残留牌会误导出牌与提示。
+	// Clear: table empty after this frame (trick collected / fresh lead) —
+	// clients must clear play areas and the "shape to beat".
 	Clear bool `json:"clear,omitempty"`
 }
 
-// playCardSuccess js 原样发送 {data,tmpFeng,sumFeng}（前端按旧用法消费）
-type playCardSuccess struct {
+type playCardSuccess struct { // legacy js shape {data,tmpFeng,sumFeng}
 	Data    []card.Card    `json:"data"`
 	TmpFeng int            `json:"tmpFeng"`
 	SumFeng map[string]int `json:"sumFeng"`

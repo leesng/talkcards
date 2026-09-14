@@ -1,6 +1,7 @@
-// Package game 一桌牌局的聚合根：发牌、先手、规则链校验、轮转、抓分、接风、终局。
-// 纯领域零 I/O，不感知连接与广播；非并发安全，由 hub 的互斥锁保护。
-// 行为对齐旧实现（game.js 移植版），wire 帧由 hub 翻译。
+// Package game is the per-table game aggregate: dealing, first-player
+// selection, rule-chain validation, turn rotation, scoring, wind relay and
+// game-over. Pure domain, no I/O; not concurrency-safe (guarded by the hub
+// lock). Wire frames are assembled by hub.
 package game
 
 import (
@@ -10,59 +11,57 @@ import (
 	"talkcards/backend/internal/card"
 )
 
-// Phase 对局阶段（数值沿用旧 status 0-5）
+// Phase values mirror the legacy numeric status codes 0-5.
 type Phase int
 
 const (
 	PhaseIdle    Phase = 0
-	PhasePlaying Phase = 2 // 出牌
-	PhaseOver    Phase = 3 // 结束
+	PhasePlaying Phase = 2
+	PhaseOver    Phase = 3
 	PhaseError   Phase = 5
 )
 
-// HandSnapshot 一家手牌的领域快照；wire 形态（id/cards/ht，HT 为红桃统计）
-// 由 hub/translator 组装，本包不感知 JSON 字段名
+// HandSnapshot is a domain snapshot of one player's hand. The wire shape
+// (id/cards/ht with HT heart stats) is assembled by hub/translator; this
+// package knows nothing about JSON field names.
 type HandSnapshot struct {
 	PosID int
 	Cards []card.Card
 }
 
-// Seat 游戏中的一名玩家
 type Seat struct {
 	PosID    int
 	Hand     []card.Card
-	Captured int // 抓分（只有出完者的抓分计入胜负线）
+	Captured int // captured points; only players who are out count toward the 300 line
 }
 
-// Team 队伍：单数位 1/3/5/7 对双数位 0/2/4/6
+// Team: odd posIDs (1/3/5/7) vs even posIDs (0/2/4/6).
 func (s *Seat) Team() int { return s.PosID % 2 }
 
-// Out 是否出完手牌
 func (s *Seat) Out() bool { return len(s.Hand) == 0 }
 
-// Trick 桌面状态：当前有效牌与滚动分。Pos 为有效牌归属座位，
-// -1 表示无（不可达的初始态；一旦进入出牌阶段恒有归属）。
+// Trick is the table state: current winning play and rolling points.
+// Pos is the seat owning the winning play, or -1 when there is none
+// (unreachable once playing starts — there is always an owner).
 type Trick struct {
 	Pos int
-	Top card.Shape // 当前有效牌型（接风后为陈旧值，Pos 匹配判断优先于 Top）
-	Pot int        // 桌面滚动分：一圈收分归赢墩者，接风不清算继续滚
+	Top card.Shape // winning shape (stale after wind relay; Pos matching takes priority over Top)
+	Pot int        // rolling table points; collected by the trick winner, kept rolling across wind relays
 }
 
-// Game 一桌牌局
 type Game struct {
 	seats      [8]Seat
 	trick      Trick
 	phase      Phase
 	ratio      int
-	turn       int // 轮到谁（contextPosID）；-1 未设置
-	leader     int // 首出者（本局先手），用于开局/重连的 SHOW_TOP_CARD
-	finalScore int // 终局胜方最终得分（全队出完时含带走对方未出手分牌）
+	turn       int // current player (contextPosID); -1 unset
+	leader     int // first player of the game, used for SHOW_TOP_CARD on start/reconnect
+	finalScore int // winner's final score; on full-team-out includes the losers' unplayed point cards
 	winner     []int
 	loser      []int
-	rnd        func(n int) int // 返回 [0,n) 随机整数；测试可注入
+	rnd        func(n int) int // returns [0,n); injectable for tests
 }
 
-// New 创建一局
 func New() *Game {
 	g := &Game{rnd: defaultRnd}
 	g.Init()
@@ -71,7 +70,7 @@ func New() *Game {
 
 func defaultRnd(n int) int { return rand.Intn(n) }
 
-// Init 重置对局（复用 Game 对象时调用）
+// Init resets the game (used when reusing a Game object).
 func (g *Game) Init() {
 	for i := range g.seats {
 		g.seats[i] = Seat{PosID: i}
@@ -86,7 +85,8 @@ func (g *Game) Init() {
 	g.loser = nil
 }
 
-// Start 发牌并确定先手，直接进入出牌阶段（无叫分流程，先手即首出者）
+// Start deals and picks the first player, entering the playing phase
+// directly — the bidding phase was deliberately removed; the leader leads.
 func (g *Game) Start() {
 	g.phase = PhasePlaying
 	g.deal()
@@ -94,12 +94,13 @@ func (g *Game) Start() {
 	g.trick.Pos = g.turn
 }
 
-// deal 324 张随机发 8 家各 40 张，剩余 4 张按 last4 随机补给
+// deal distributes the 324-card deck: 40 cards per seat, plus the 4 leftover
+// cards dealt one each to the seats picked by last4.
 func (g *Game) deal() {
 	deck := card.NewDeck()
 	maxIndex := len(deck) - 1
 	c1, c2, c3, c4 := g.rnd(2), g.rnd(2), g.rnd(2), g.rnd(2)
-	// 324张牌剩余4张：0,2随机多分一张，1和3随机分一张，4,6随机多分一张，5,7随机分一张
+	// leftover 4 cards: one extra each to two of {0,1}/{2,3} and two of {4,5}/{6,7}
 	last4 := [8]int{c1, c2, 1 - c1, 1 - c2, c3, c4, 1 - c3, 1 - c4}
 
 	for i := range g.seats {
@@ -121,7 +122,9 @@ func (g *Game) deal() {
 	}
 }
 
-// whoFirst 红桃 3 最多者先出；相同则比 3 的总数（不分花色）；仍相同随机定先手。
+// whoFirst: most heart-3s leads; ties broken by total count of 3s (any suit),
+// then randomly. Deliberate deviation from the Node version, which used a
+// heart-suit dictionary order that included jokers.
 func (g *Game) whoFirst() {
 	best := []int{0}
 	maxH3, maxT3 := -1, -1
@@ -146,18 +149,16 @@ func (g *Game) whoFirst() {
 	g.leader = g.turn
 }
 
-// ---------- 规则链（共享上下文、责任链式校验） ----------
-
-// PlayContext 一次出牌尝试的共享上下文，规则链逐环读写
+// PlayContext is the shared context of one play attempt, read and written by
+// each rule in the chain.
 type PlayContext struct {
 	Game   *Game
 	Pos    int
 	Cards  []card.Card
-	Shapes []card.Shape // ruleClassify 产出的全部合法解读
-	Hit    *card.Shape  // 命中（可用于落桌）的解读
+	Shapes []card.Shape // all legal interpretations produced by ruleClassify
+	Hit    *card.Shape  // the interpretation that can hit the table
 }
 
-// Violation 规则未通过
 type Violation struct {
 	Rule   string
 	Reason string
@@ -165,11 +166,11 @@ type Violation struct {
 
 func (v *Violation) Error() string { return v.Rule + ": " + v.Reason }
 
-// Rule 一条校验规则：通过返回 nil
+// Rule is one validation step; nil means passed.
 type Rule func(*PlayContext) *Violation
 
-// playRules 出牌校验链。注意与旧实现一致：不校验轮次——
-// 越序由 Play 应用阶段检查（旧 hub 先 Validate 后 Next 的语义）。
+// playRules deliberately does not check turn order, matching the legacy
+// Validate-then-Next semantics; out-of-turn is caught in Play's apply stage.
 var playRules = []Rule{rulePhasePlaying, ruleHandHas, ruleClassify, ruleBeatTable}
 
 func rulePhasePlaying(ctx *PlayContext) *Violation {
@@ -179,8 +180,9 @@ func rulePhasePlaying(ctx *PlayContext) *Violation {
 	return nil
 }
 
-// ruleHandHas 防作弊：所出的牌确实在手。与旧实现逐条一致——
-// 每张牌独立查手牌（重复出同一张具体牌不会被拦，bug-for-bug 保留）。
+// ruleHandHas checks the played cards are actually in hand. Bug-for-bug with
+// the legacy implementation: each card is checked against the hand
+// independently, so playing the same exact card twice is not caught.
 func ruleHandHas(ctx *PlayContext) *Violation {
 	hand := ctx.Game.seats[ctx.Pos].Hand
 	for _, c := range ctx.Cards {
@@ -206,8 +208,9 @@ func ruleClassify(ctx *PlayContext) *Violation {
 	return nil
 }
 
-// ruleBeatTable 压制判定：新一轮首出（自己是上一手出牌人）任意合法牌型，
-// 取基础解读；否则按解读顺序尝试压桌面牌
+// ruleBeatTable: when leading a new round (trick.Pos is self or unset) any
+// legal shape is fine and the base interpretation is used; otherwise the
+// interpretations are tried in order against the table's top shape.
 func ruleBeatTable(ctx *PlayContext) *Violation {
 	g := ctx.Game
 	if g.trick.Pos == ctx.Pos || g.trick.Pos == -1 {
@@ -223,26 +226,25 @@ func ruleBeatTable(ctx *PlayContext) *Violation {
 	return &Violation{"beat", "压不住桌面牌"}
 }
 
-// ---------- 用例方法 ----------
-
-// PlayResult 一手牌的受理结果：
-//   - Accepted=false：牌不合法（旧 hub 发 PLAY_CARD_ERROR(data)，状态不变）
-//   - Accepted=true, Applied=false：越序，对局被置 PhaseError（旧 Next 毒化语义）
-//   - Accepted=true, Applied=true：正常受理（出牌或过牌）
+// PlayResult is the outcome of one play attempt:
+//   - Accepted=false: illegal cards (legacy hub sent PLAY_CARD_ERROR), no state change
+//   - Accepted=true, Applied=false: out of turn; the game is poisoned to PhaseError (legacy Next semantics)
+//   - Accepted=true, Applied=true: applied normally (play or pass)
 type PlayResult struct {
 	Accepted bool
 	Applied  bool
-	HasShape bool       // 是否命中牌型（过牌/未受理为 false；越序但合法时为 true）
-	Shape    card.Shape // 命中牌型（HasShape 时有效；wire 的 key/type 取 Rank/TypeName）
+	HasShape bool       // hit a shape (false on pass/reject; true even when out of turn but legal)
+	Shape    card.Shape // the hit shape, valid when HasShape; wire key/type come from Rank/TypeName
 }
 
-// Play 受理一手出牌（空手牌 = 过牌，跳过校验直接进入应用，与旧 hub 一致）
+// Play handles one play attempt. An empty hand means pass: validation is
+// skipped and it goes straight to apply, matching the legacy hub.
 func (g *Game) Play(pos int, cards []card.Card) PlayResult {
 	res := PlayResult{Accepted: len(cards) == 0}
 	if !res.Accepted {
 		ctx := g.validatePlay(pos, cards)
 		if ctx == nil {
-			return res // 未受理，状态不变
+			return res // rejected, no state change
 		}
 		res.Accepted = true
 		res.HasShape, res.Shape = true, *ctx.Hit
@@ -250,7 +252,6 @@ func (g *Game) Play(pos int, cards []card.Card) PlayResult {
 	return g.apply(pos, cards, res)
 }
 
-// validatePlay 规则链校验（不含轮次）；不通过返回 nil
 func (g *Game) validatePlay(pos int, cards []card.Card) *PlayContext {
 	ctx := &PlayContext{Game: g, Pos: pos, Cards: cards}
 	for _, rule := range playRules {
@@ -261,17 +262,19 @@ func (g *Game) validatePlay(pos int, cards []card.Card) *PlayContext {
 	return ctx
 }
 
-// apply 应用一口（Next 语义）：越序先毒化；出牌阶段推进轮转/桌面/收分/接风/终局
+// apply is the legacy Next semantics: an out-of-turn play poisons the game;
+// during playing it advances rotation/trick/scoring/wind relay/game-over.
 func (g *Game) apply(pos int, cards []card.Card, res PlayResult) PlayResult {
 	if pos != g.turn {
-		// 一般不会进来：越序出牌毒化对局，客户端必须严格按 CTX_PLAY_CHANGE 出牌
+		// Should not normally happen: out-of-turn play poisons the game;
+		// clients must play strictly per CTX_PLAY_CHANGE.
 		g.phase = PhaseError
 		return res
 	}
 	if g.phase == PhasePlaying {
 		res.Applied = true
 
-		// 先推进轮转（出完牌的人要跳过）
+		// Advance rotation first (players who are out must be skipped).
 		g.turn = g.nextPosID(pos)
 
 		if res.HasShape {
@@ -281,13 +284,14 @@ func (g *Game) apply(pos int, cards []card.Card, res PlayResult) PlayResult {
 		g.removeCards(cards, pos)
 		g.trick.Pot += scoreOf(cards)
 
-		// 又轮回到上一手出牌人 => 一圈无人压牌，桌面分归其收取
+		// Rotation wrapped back to the last player => nobody beat it; they collect the pot.
 		if g.trick.Pos == g.turn {
 			g.seats[g.trick.Pos].Captured += g.trick.Pot
 			g.trick.Pot = 0
 		}
 
-		// 出完牌则让同队下一位有牌的队友接风（本轮余家不再有机会压）
+		// On running out of cards, the next teammate with cards takes over
+		// (wind relay); the other players don't get to beat this trick.
 		if g.seats[pos].Out() {
 			g.turn = g.nextGroupPosID(g.trick.Pos)
 			g.trick.Pos = g.turn
@@ -300,7 +304,7 @@ func (g *Game) apply(pos int, cards []card.Card, res PlayResult) PlayResult {
 	return res
 }
 
-// scoreOf 出牌分：5 计 5 分，10/K 计 10 分
+// scoreOf: 5s are worth 5 points, 10s and kings 10.
 func scoreOf(cards []card.Card) int {
 	sum := 0
 	for _, c := range cards {
@@ -309,7 +313,8 @@ func scoreOf(cards []card.Card) int {
 	return sum
 }
 
-// removeCards 出牌后从手牌移除（按 face+suit 匹配，逐张移一次）
+// removeCards removes played cards from the hand (matched by face+suit, one
+// occurrence removed per played card).
 func (g *Game) removeCards(cards []card.Card, pos int) {
 	hand := g.seats[pos].Hand
 	for _, c := range cards {
@@ -323,7 +328,8 @@ func (g *Game) removeCards(cards []card.Card, pos int) {
 	g.seats[pos].Hand = hand
 }
 
-// nextPosID 顺时针下一个还有牌的人；无人有牌返回 -1（JS 返回 undefined）
+// nextPosID returns the next player clockwise still holding cards, or -1 if
+// nobody does (JS returned undefined).
 func (g *Game) nextPosID(pos int) int {
 	for i := 0; i < 7; i++ {
 		next := (pos + 1 + i) % 8
@@ -334,7 +340,8 @@ func (g *Game) nextPosID(pos int) int {
 	return -1
 }
 
-// nextGroupPosID 出完牌后让同队下一位有牌的队友接手（隔位顺延）
+// nextGroupPosID picks the next teammate with cards two seats at a time
+// (wind-relay handover after a player runs out).
 func (g *Game) nextGroupPosID(pos int) int {
 	for i := 0; i < 3; i++ {
 		next := (pos + 2 + 2*i) % 8
@@ -345,7 +352,8 @@ func (g *Game) nextGroupPosID(pos int) int {
 	return -1
 }
 
-// isGameOver 终局判定：某队全部出完（带走对方未出手分牌），或出完者累计抓分 ≥300。
+// isGameOver: a team all out (taking the opponents' unplayed point cards), or
+// the players who are out on one team captured >= 300 in total.
 func (g *Game) isGameOver() bool {
 	even := [4]int{0, 2, 4, 6}
 	odd := [4]int{1, 3, 5, 7}
@@ -396,7 +404,6 @@ func (g *Game) setWinner(winner, loser [4]int) {
 	g.loser = []int{loser[0], loser[1], loser[2], loser[3]}
 }
 
-// teamCaptured 某队已收分合计
 func (g *Game) teamCaptured(team [4]int) int {
 	s := 0
 	for _, p := range team {
@@ -405,7 +412,8 @@ func (g *Game) teamCaptured(team [4]int) int {
 	return s
 }
 
-// leftoverScore 一方剩余手牌中的分牌合计（全队出完终局时被对方带走）
+// leftoverScore totals the point cards left in a team's hands (taken by the
+// winners on a full-team-out game over).
 func (g *Game) leftoverScore(team [4]int) int {
 	s := 0
 	for _, p := range team {
@@ -416,15 +424,14 @@ func (g *Game) leftoverScore(team [4]int) int {
 	return s
 }
 
-// ---------- 快照（hub 组装 wire 帧 / 重连重放 / 落库用） ----------
-
 func (g *Game) Phase() Phase  { return g.phase }
 func (g *Game) Turn() int     { return g.turn }
 func (g *Game) TrickPos() int { return g.trick.Pos }
 func (g *Game) TmpFeng() int  { return g.trick.Pot }
 
-// TrickTop 当前一轮需要压制的牌型；ok=false 表示自由首出（无需压牌）。
-// 判断与 validatePlay 一致：无有效上手（Pos==-1）或一圈压回出牌人本人（Pos==轮到者）均为首出。
+// TrickTop is the shape the current round must beat; ok=false means a free
+// lead. The condition matches validatePlay: no winning play yet (Pos==-1) or
+// the round wrapped back to the current player (Pos==turn) both mean leading.
 func (g *Game) TrickTop() (top card.Shape, ok bool) {
 	if g.trick.Pos == -1 || g.trick.Pos == g.turn {
 		return card.Shape{}, false
@@ -432,7 +439,8 @@ func (g *Game) TrickTop() (top card.Shape, ok bool) {
 	return g.trick.Top, true
 }
 
-// posArray8 内部快照用数组承载（原 JS 数字键对象改为 wire 输出端重建 {"0":..} 形态）
+// posArray8 builds internal snapshots as arrays; the wire-side rebuilds the
+// legacy JS numeric-key-object shape {"0":..} at output time.
 func posArray8(f func(i int) int) [8]int {
 	var a [8]int
 	for i := range a {
@@ -441,13 +449,13 @@ func posArray8(f func(i int) int) [8]int {
 	return a
 }
 
-// SumFeng 各座位累计抓分快照
 func (g *Game) SumFeng() [8]int {
 	return posArray8(func(i int) int { return g.seats[i].Captured })
 }
 
-// Hands 8 家手牌快照（旧实现将 8 家手牌全部广播，前端亮牌/余张依赖；
-// 红桃统计等 wire 细节由 hub 侧组装）
+// Hands broadcasts all 8 hands (bug-for-bug with the legacy implementation;
+// the frontend relies on it for revealed hands and remaining counts). Wire
+// details like heart stats are assembled on the hub side.
 func (g *Game) Hands() []HandSnapshot {
 	out := make([]HandSnapshot, len(g.seats))
 	for i := range g.seats {
@@ -460,21 +468,19 @@ func (g *Game) Hands() []HandSnapshot {
 	return out
 }
 
-// HandLen 某座位剩余手牌数（断线重连/落库）
 func (g *Game) HandLen(pos int) int { return len(g.seats[pos].Hand) }
 
-// DizhuPosID 首出者（本局先手，开局确定后不变）
 func (g *Game) DizhuPosID() int { return g.leader }
 
-// TopCards 无底牌玩法，恒为空（wire 契约）
+// TopCards: no kitty in this variant; always empty (wire contract).
 func (g *Game) TopCards() []card.Card { return []card.Card{} }
 
-// Result 终局结果（GAME_OVER payload）
+// Result is the game-over result (GAME_OVER payload).
 func (g *Game) Result() Result {
 	return Result{Winner: g.winner, Loser: g.loser, Score: g.finalScore, Ratio: g.ratio}
 }
 
-// Result 终局结果（纯领域值；wire 字段名由 hub 侧 payload 承载）
+// Result is a pure domain value; wire field names live in the hub payload.
 type Result struct {
 	Winner []int
 	Loser  []int

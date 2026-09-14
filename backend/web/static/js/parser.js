@@ -1,11 +1,9 @@
-// 数组排序
 function arraySort(array, asc) {
     return array.sort(function (a, b) {
         return asc === 'asc' ? a - b : b - a;
     })
 }
 
-// 计算数组中每个成员出现的次数，返回一个去重的次数数组
 function getCountArrayForGroupByCard(array, asc) {
     var ret = getGroupByCard(array);
     var r = [];
@@ -16,7 +14,6 @@ function getCountArrayForGroupByCard(array, asc) {
     return r;
 }
 
-// 统计数组中每个成员出现的次数
 function getGroupByCard(array) {
     var ret = {};
     array.forEach(function (item) {
@@ -28,7 +25,6 @@ function getGroupByCard(array) {
     return ret;
 }
 
-// 数组去重
 function arrayClearRepeat(array) {
     var ret = [];
     array.forEach(function (item) {
@@ -39,31 +35,26 @@ function arrayClearRepeat(array) {
     return ret;
 }
 
-// 从一个数组中过滤掉 >=n 的成员
 function removeItemOverOf(array, n) {
     return array.filter(function (item) {
         return item < n;
     });
 }
 
-// 数组的最大成员是否 < n;
 function maxItemLessThan(array, n) {
     return Math.max.apply(Math, array) < n;
 }
 
-// 数组的最大成员是否 >= n;
 function maxItemMoreThan(array, n) {
     return Math.max.apply(Math, array) >= n;
 }
 
-// 获取数组中最小的成员;
 function getMinItem(array) {
     if (!array.length) {
         return undefined;
     }
     return Math.min.apply(Math, array);
 }
-// 获取数组中最大的成员
 function getMaxItem(array) {
     if (!array.length) {
         return undefined;
@@ -71,7 +62,6 @@ function getMaxItem(array) {
     return Math.max.apply(Math, array);
 }
 
-// 筛选数组中累计出现过至少n次的成员
 function getCardByCountOverOf(array, n) {
     var ret = getGroupByCard(array);
     var r = [];
@@ -83,7 +73,6 @@ function getCardByCountOverOf(array, n) {
     return r;
 }
 
-// 筛选数组中出现过n次的成员
 function getCardByCount(array, n) {
     var ret = getGroupByCard(array);
     var r = [];
@@ -95,8 +84,6 @@ function getCardByCount(array, n) {
     return r;
 }
 
-// 筛选数组中出现n次的成员与其它出现n次的成员，
-// 若能组成等差数组，则返回这些成员的list（最长的那个等差数列,若长度一致，取最大的那一列）
 function getSequence(array, n) {
     var r = arraySort(getCardByCount(array, n), 'asc');
     var rets = [];
@@ -127,7 +114,6 @@ function getSequence(array, n) {
 
 }
 
-// 检查数组是否为等差数组 （差值 1）
 function checkSequence(array) {
     array = arraySort(array, 'asc');
     for (var i = 0, len = array.length - 1; i < len; i++) {
@@ -140,9 +126,7 @@ function checkSequence(array) {
     return true;
 }
 
-// 出牌类型
 const TYPES = {
-    //  单张
     A: function (cards) {
         return {
             len: 1,
@@ -150,7 +134,6 @@ const TYPES = {
             status: cards.length === 1
         }
     },
-    // 对子
     AA: function (cards) {
         var status = cards.length === 2 && cards[0] === cards[1];
         return {
@@ -159,7 +142,6 @@ const TYPES = {
             status: status
         }
     },
-    // 三张
     AAA: function (cards) {
         var status = cards.length === 3 && cards[0] === cards[1] && cards[1] === cards[2];
         return {
@@ -169,7 +151,6 @@ const TYPES = {
         }
     },
 
-    // 3小王炸
     XKING3: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && ret[0] === 16 && cards.length === 3;
@@ -180,7 +161,6 @@ const TYPES = {
         }
     },
 
-    // 3大王炸
     DKING3: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && ret[0] === 17 && cards.length === 3;
@@ -190,7 +170,6 @@ const TYPES = {
             status: status
         }
     },
-    // 炸弹（四张）
     AAAA: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && cards.length === 4;
@@ -201,7 +180,6 @@ const TYPES = {
         }
     },
 
-    // 4小王炸
     XKING4: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && ret[0] === 16 && cards.length === 4;
@@ -212,7 +190,6 @@ const TYPES = {
         }
     },
 
-    // 4大王炸
     DKING4: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && ret[0] === 17 && cards.length === 4;
@@ -232,7 +209,6 @@ const TYPES = {
         }
     },
 
-    // 5小王炸
     XKING5: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && ret[0] === 16 && cards.length === 5;
@@ -243,7 +219,6 @@ const TYPES = {
         }
     },
 
-    // 5大王炸
     DKING5: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && ret[0] === 17 && cards.length === 5;
@@ -263,7 +238,6 @@ const TYPES = {
         }
     },
 
-    // 6小王炸
     XKING6: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && ret[0] === 16 && cards.length === 6;
@@ -274,7 +248,6 @@ const TYPES = {
         }
     },
 
-    // 6大王炸
     DKING6: function (cards) {
         var ret = arrayClearRepeat(cards);
         var status = ret.length === 1 && ret[0] === 17 && cards.length === 6;
@@ -477,7 +450,6 @@ var cardValidator = {
 }
 
 
-//验证牌型
 function validate(cards) {
     var len = cards.length;
     var int_cards = cards.map(function (card) {
@@ -516,11 +488,11 @@ function validate(cards) {
     }
 }
 
-// ==================== 出牌提示 ====================
-// 与后端 internal/card/shape.go 对齐：牌型对象 {kind, rank, len}，
-// kind 取值 single|pair|triple|bomb|kingbomb。改压牌规则时两边必须同步。
+// Play hints. Mirrors backend internal/card/shape.go: shape objects
+// {kind, rank, len} with kind in single|pair|triple|bomb|kingbomb.
+// Any change to the beat rules must be synchronized on both sides.
 
-// 由 CTX_PLAY_CHANGE 的牌型描述（type/key/len）还原上家牌型；无有效描述返回 null
+// Rebuild the previous player's shape from a CTX_PLAY_CHANGE description (type/key/len); null if not a valid shape.
 function parseShape(type, rank, len) {
     var n = len > 0 ? len : 0;
     if (!type || !n) {
@@ -547,7 +519,7 @@ function parseShape(type, rank, len) {
     return null;
 }
 
-// 候选牌型 c 能否压住桌面牌型 t（规则见 game-rules.md「压牌」与「大小王规则」）
+// Whether candidate shape c beats table shape t (see game-rules.md).
 function shapeBeats(c, t) {
     if (!c || !t) {
         return false;
@@ -578,7 +550,7 @@ function shapeBeats(c, t) {
     return false;
 }
 
-// 一组同值牌取 l 张时的全部合法解读（与后端 Classify 一致：基础牌型在前，王炸在后）
+// All legal readings of l cards of one face (matches backend Classify: basic shapes first, king bombs after).
 function shapesOfPlay(value, l) {
     var shapes = [];
     if (l === 1) {
@@ -596,10 +568,10 @@ function shapesOfPlay(value, l) {
     return shapes;
 }
 
-// 手牌候选：按「孤张单 → 对 → 三 → 炸弹」分组、组内牌值升序（与 e2e-audit 机器人一致）。
-// 炸弹组例外：先按张数升序（4炸<5炸<6炸…），同张数再按牌面升序。
-// 每个牌值按现有张数整体成组，不拆对/三：1=孤张单、2=对、3=三、
-// ≥4 张或 3 张以上同王=炸弹。返回按组序排列的候选，每项为该组全部牌。
+// Hand candidates grouped as loner single → pair → triple → bomb, faces
+// ascending within a group (same strategy as the e2e-audit bot); bombs sort
+// by count first, then face. Each face groups by its whole count (never split
+// pairs/triples; ≥4 cards or ≥3 same joker = bomb).
 function hintCandidates(hand) {
     var groups = {};
     var order = [];
@@ -613,19 +585,19 @@ function hintCandidates(hand) {
     order.sort(function (a, b) {
         return a - b;
     });
-    var buckets = [[], [], [], []]; // 单/对/三/炸弹
+    var buckets = [[], [], [], []]; // single/pair/triple/bomb
     order.forEach(function (value) {
         var cards = groups[value];
-        var gi = cards.length - 1; // 1→单 2→对 3→三 ≥4→炸弹
+        var gi = cards.length - 1;
         if ((value === 16 || value === 17) && cards.length >= 3) {
-            gi = 3; // 3 张以上同王按王炸处理，不当作三条
+            gi = 3; // ≥3 same jokers count as a king bomb, not a triple
         }
         if (gi > 3) {
             gi = 3;
         }
         buckets[gi].push(cards);
     });
-    // 炸弹组：先按张数（4炸<5炸<6炸…），张数相同再按牌面从小到大
+    // Bombs: fewer cards first, then lower face.
     buckets[3].sort(function (a, b) {
         if (a.length !== b.length) {
             return a.length - b.length;
@@ -635,21 +607,22 @@ function hintCandidates(hand) {
     return buckets[0].concat(buckets[1], buckets[2], buckets[3]);
 }
 
-// 在手牌中选出"刚好大过上家"的一组牌；仅做选择，不负责出牌。
-// 组必须保持整体：存在对子/三条时不会拆成单张去跟牌，跟不住则返回 null（建议不出）。
-// topShape 为 null 表示自由首出（一轮第一手）：按 孤张单→对→三→炸弹 取组序最前的一组。
+// Pick the smallest group that just beats the previous play; selection only,
+// never plays. Groups stay whole (pairs/triples are never split to follow);
+// null when nothing beats (suggest passing). topShape null = free lead:
+// take the first group in group order.
 function findHintCards(hand, topShape) {
     if (!hand || !hand.length) {
         return null;
     }
     var cands = hintCandidates(hand);
 
-    // 自由首出：没有"上一手"可压，取组序最前的一组整体出
+    // Free lead: nothing to beat, play the first whole group.
     if (!topShape) {
         return cands.length ? cands[0].slice() : null;
     }
 
-    // 跟牌：按组序找第一组能压住的（组内牌值升序，即最"刚好"的一组）
+    // Follow: first group in order that beats (faces ascend, so it's the tightest).
     for (var i = 0; i < cands.length; i++) {
         var cards = cands[i];
         var shapes = shapesOfPlay(cards[0].value, cards.length);

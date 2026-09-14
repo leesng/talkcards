@@ -10,7 +10,7 @@ import (
 	"talkcards/backend/internal/store"
 )
 
-// TestBotOnlyGameSelfPlay 8 个机器人自打整局，验证轮转/终局/清理无停滞
+// TestBotOnlyGameSelfPlay: 8 bots self-play a full game without stalling.
 func TestBotOnlyGameSelfPlay(t *testing.T) {
 	st, _ := store.Open(filepath.Join(t.TempDir(), "diag.db"))
 	defer st.Close()
@@ -35,7 +35,7 @@ func TestBotOnlyGameSelfPlay(t *testing.T) {
 			return
 		}
 		if phase == game.PhaseIdle {
-			// 终局后立即 ResetGame，轮询往往只看到 Idle：全部手牌已空即视为打完
+			// ResetGame runs right after the finish; all-empty hands = done.
 			empty := true
 			for _, hs := range lens {
 				if len(hs.Cards) > 0 {
@@ -66,9 +66,10 @@ func TestBotOnlyGameSelfPlay(t *testing.T) {
 	t.Fatalf("60s 未终局")
 }
 
-// TestHumanWithBotsFullGame 7 机器人 + 座 3 真人打完整局：真人复刻 e2e 驱动策略
-// （乱序逐张试单张、全被拒则过牌）。关键点：出牌后必须轮询等待 PLAY_CARD_SUCCESS/
-// PLAY_CARD_ERROR 帧——pump 异步投递，同步读会误判被拒而重出同一张，触发越序毒化。
+// TestHumanWithBotsFullGame: 7 bots + a human at seat 3. Pitfall: frames
+// arrive async via the pump — after each play you MUST poll for the
+// SUCCESS/ERROR frame; a synchronous read misjudges it as rejected, replays
+// the same card, and poisons the game out of turn.
 func TestHumanWithBotsFullGame(t *testing.T) {
 	st, _ := store.Open(filepath.Join(t.TempDir(), "diag2.db"))
 	defer st.Close()
@@ -94,9 +95,7 @@ func TestHumanWithBotsFullGame(t *testing.T) {
 		}
 	}
 
-	// trySingle 与 e2e 驱动一致：emit 单张后查响应帧，SUCCESS 则出手牌，ERROR 换下一张
-	// trySingle 与 e2e 驱动一致：emit 单张后轮询等 SUCCESS/ERROR 帧（pump 异步投递，
-	// 同步读 snapshot 会误判被拒→重出同一张→越序毒化），SUCCESS 则出手牌，ERROR 换下一张
+	// trySingle: emit a single, poll for the response frame (see pitfall above).
 	trySingle := func(c card.Card) bool {
 		before := len(c0.snapshot())
 		h.onPlayCard(c0, []card.Card{c})
@@ -130,7 +129,7 @@ func TestHumanWithBotsFullGame(t *testing.T) {
 		h.mu.Unlock()
 
 		if _, ok := findEvent(c0, EvGameOver); ok {
-			return // 正常终局
+			return // finished normally
 		}
 		if turn != lastTurn {
 			lastTurn, lastChange = turn, time.Now()
@@ -153,10 +152,10 @@ func TestHumanWithBotsFullGame(t *testing.T) {
 				}
 			}
 			if !played {
-				h.onPlayCard(c0, nil) // 全被拒则过牌
+				h.onPlayCard(c0, nil) // every single rejected: pass
 			}
 		default:
-			// 出现新的 GAME_START（重发）时才刷新手牌，避免每拍重置丢失已出牌
+			// Reload the hand only on a new GAME_START, else played cards are lost.
 			if n := countEvent(c0, EvGameStart); n != lastGameStart {
 				lastGameStart = n
 				loadHand()

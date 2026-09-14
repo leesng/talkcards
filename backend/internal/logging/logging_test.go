@@ -16,7 +16,7 @@ func TestNewLevels(t *testing.T) {
 		t.Fatal("级别过滤不正确")
 	}
 
-	// 大小写不敏感
+	// level parsing is case-insensitive
 	if _, err := New(Options{Level: "ERROR", Format: "Text"}); err != nil {
 		t.Fatal(err)
 	}

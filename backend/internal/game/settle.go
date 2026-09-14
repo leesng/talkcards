@@ -1,9 +1,9 @@
-// settle.go 终局结算：两队最终得分（吸收原 hub.recordGame 的计分逻辑）。
 package game
 
-// TeamScores 终局两队最终得分。
-// 基线为全队已收分合计；正常终局且全队出完时，胜队改用 Result.Score
-// （含带走对方未出手分牌）。escape 终局（Winner 为空）退化为纯收分合计。
+// TeamScores returns both teams' final scores. Baseline is each team's total
+// captured points; on a normal full-team-out finish the winner's score is
+// replaced by Result.Score (which includes the losers' unplayed point cards).
+// An escape finish (empty Winner) degrades to plain captured totals.
 func (g *Game) TeamScores() (team0, team1 int) {
 	for i := range g.seats {
 		if g.seats[i].Team() == 0 {

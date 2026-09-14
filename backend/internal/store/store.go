@@ -1,6 +1,7 @@
-// Package store 对局战绩的 SQLite 持久化（GORM + glebarez/sqlite 纯 Go 驱动）。
-// 所有调用方为 hub（单互斥锁下串行），包内不再加锁。
-// 登录仅以用户名为唯一身份（不落库），此处只保存战绩。
+// Package store persists game records to SQLite (GORM + the pure-Go
+// glebarez/sqlite driver). All callers are hub (serialized under a single
+// mutex), so no locking here. Login identity is the user name only (not
+// persisted); only game records are stored.
 package store
 
 import (
@@ -13,43 +14,44 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// GamePlayer 一局中单个玩家的摘要
+// GamePlayer is one player's summary within a game.
 type GamePlayer struct {
 	PosID     int    `json:"posId"`
 	UserName  string `json:"userName"`
 	SumFeng   int    `json:"sumFeng"`
-	Remaining int    `json:"remaining"` // 终局剩余手牌数
+	Remaining int    `json:"remaining"` // cards left at game over
 	Win       bool   `json:"win"`
 }
 
-// GameRecord 一局的对局记录；EndReason: normal（正常打完）/ escape（有人逃跑终止）
+// GameRecord is one game's record; EndReason: normal (played out) / escape
+// (aborted by a player leaving).
 type GameRecord struct {
 	GameID     int64
 	DeskID     int
 	StartedAt  time.Time
 	EndedAt    time.Time
 	EndReason  string
-	Winner     []int // 仅 GameDetail 输出填充（落库由 Players[].Win 承载，SaveGame 忽略此字段）；escape 局为 nil
-	Team0Score int   // 偶数队最终得分（正常局胜队含带走分）
-	Team1Score int   // 奇数队最终得分
+	Winner     []int // filled only for GameDetail output (persistence uses Players[].Win; SaveGame ignores it); nil for escape games
+	Team0Score int   // even team's final score (normal games include the takeover points)
+	Team1Score int   // odd team's final score
 	Players    []GamePlayer
 }
 
-// HistoryItem 个人战绩列表条目
+// HistoryItem is one entry of a player's history list.
 type HistoryItem struct {
 	GameID    int64  `json:"gameId"`
 	DeskID    int    `json:"deskId"`
 	EndedAt   string `json:"endedAt"`
 	EndReason string `json:"endReason"`
 	Win       bool   `json:"win"`
-	TeamScore int    `json:"teamScore"` // 本队最终得分
-	OppScore  int    `json:"oppScore"`  // 对手队最终得分
-	SumFeng   int    `json:"sumFeng"`   // 本人收分
+	TeamScore int    `json:"teamScore"` // player's own team final score
+	OppScore  int    `json:"oppScore"`  // opposing team final score
+	SumFeng   int    `json:"sumFeng"`   // player's own captured points
 	Remaining int    `json:"remaining"`
-	PlayerNum int    `json:"playerNum"` // 本局记录的玩家人数
+	PlayerNum int    `json:"playerNum"` // number of players recorded for the game
 }
 
-// gameRow games 表；时间以 RFC3339 文本落库
+// gameRow is the games table; times stored as RFC3339 text.
 type gameRow struct {
 	ID         int64       `gorm:"primaryKey;autoIncrement"`
 	DeskID     int         `gorm:"not null"`
@@ -58,12 +60,13 @@ type gameRow struct {
 	EndReason  string      `gorm:"not null"`
 	Team0Score int         `gorm:"not null"`
 	Team1Score int         `gorm:"not null"`
-	Players    []playerRow `gorm:"foreignKey:GameID"` // 仅读路径（Preload）使用；写入走显式事务
+	Players    []playerRow `gorm:"foreignKey:GameID"` // read path only (Preload); writes use an explicit transaction
 }
 
 func (gameRow) TableName() string { return "games" }
 
-// playerRow game_players 表；username+game_id 复合索引服务战绩列表查询
+// playerRow is the game_players table; the username+game_id composite index
+// serves the history-list query.
 type playerRow struct {
 	GameID    int64  `gorm:"not null;index:idx_game_players_user,priority:2,sort:desc"`
 	PosID     int    `gorm:"not null"`
@@ -79,9 +82,9 @@ type Store struct {
 	db *gorm.DB
 }
 
-// Open 打开（或创建）数据库并 AutoMigrate 建表
+// Open opens (or creates) the database and auto-migrates the schema.
 func Open(path string) (*Store, error) {
-	// PRAGMA 经 DSN 下发：busy_timeout 兜底偶发锁竞争，WAL 提升读写并发
+	// PRAGMAs via DSN: busy_timeout absorbs occasional lock contention, WAL improves read/write concurrency.
 	db, err := gorm.Open(sqlite.Open(path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -105,8 +108,9 @@ func (s *Store) Close() error {
 	return sqlDB.Close()
 }
 
-// SaveGame 落库一局结果，返回自增对局 ID。
-// 关联保存（Create 带子切片）会先插子行且带 upsert 语义，这里改为显式事务两步插入。
+// SaveGame persists one game result and returns its auto-incremented ID.
+// GORM's association save (Create with a child slice) inserts children first
+// with upsert semantics, so this uses an explicit two-step transaction instead.
 func (s *Store) SaveGame(rec GameRecord) (int64, error) {
 	g := gameRow{
 		DeskID:     rec.DeskID,
@@ -144,7 +148,8 @@ func (s *Store) SaveGame(rec GameRecord) (int64, error) {
 	return id, err
 }
 
-// fmtTime RFC3339 原文转展示格式；解析失败（历史脏数据）原样返回
+// fmtTime converts an RFC3339 timestamp to display format; unparseable values
+// (dirty historical data) are returned as-is.
 func fmtTime(raw string) string {
 	if t, err := time.Parse(time.RFC3339, raw); err == nil {
 		return t.Format("2006-01-02 15:04:05")
@@ -152,7 +157,8 @@ func fmtTime(raw string) string {
 	return raw
 }
 
-// HistoryList 某玩家参与的战绩（按结束时间倒序），返回条目与总数
+// HistoryList lists a player's games (newest first), returning the entries
+// and the total count.
 func (s *Store) HistoryList(userName string, limit, offset int) ([]HistoryItem, int, error) {
 	var total int64
 	if err := s.db.Model(&playerRow{}).Where("username = ?", userName).Count(&total).Error; err != nil {
@@ -184,7 +190,7 @@ func (s *Store) HistoryList(userName string, limit, offset int) ([]HistoryItem, 
 			}
 			it.Win, it.SumFeng, it.Remaining = p.Win, p.SumFeng, p.Remaining
 			it.TeamScore, it.OppScore = g.Team0Score, g.Team1Score
-			if p.PosID%2 != 0 { // 奇数队视角互换
+			if p.PosID%2 != 0 { // odd team sees the scores swapped
 				it.TeamScore, it.OppScore = g.Team1Score, g.Team0Score
 			}
 		}
@@ -193,7 +199,7 @@ func (s *Store) HistoryList(userName string, limit, offset int) ([]HistoryItem, 
 	return list, int(total), nil
 }
 
-// GameDetail 单局详情；不存在返回 false
+// GameDetail fetches one game's detail; false if not found.
 func (s *Store) GameDetail(gameID int64) (GameRecord, bool, error) {
 	var g gameRow
 	err := s.db.Preload("Players", func(tx *gorm.DB) *gorm.DB { return tx.Order("pos_id") }).

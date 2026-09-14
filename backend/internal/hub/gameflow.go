@@ -1,5 +1,4 @@
-// gameflow.go 对局事件处理与生命周期：叫分/出牌/开局/终止/落库/断线保留。
-// 调用方（事件 handler）均已持有 h.mu。
+// gameflow.go: game lifecycle; all callers hold h.mu.
 package hub
 
 import (
@@ -24,38 +23,36 @@ func (h *Hub) onPlayCard(s wssrv.Conn, data []card.Card) {
 	}
 	g := d.Game
 
-	// 托管中由系统代打，手动出牌拒绝（避免与代打竞态越序毒化对局）
+	// Reject manual plays while trusted out: racing the bot out-of-turn poisons the game.
 	if seat := d.Seat(c.posID); seat != nil && seat.Trustee {
 		h.emit(c, EvMessage, msgPayload{Msg: "托管中，请先取消托管再手动操作"})
 		return
 	}
 
-	// 校验+应用一步完成；越序的合法牌会毒化对局（bug-for-bug：帧照播、双事件齐发）
+	// Out-of-turn valid plays poison the game (bug-for-bug: frame still broadcast, both events fire).
 	res := g.Play(c.posID, data)
 	h.applyPlayResult(d, c.posID, c, data, res)
 }
 
-// applyPlayResult 出牌应用与广播（真人与机器人共用）。
-// posID 为出牌者座位；origin 为动作发起者会话（机器人传 nil：不回
-// PLAY_CARD_SUCCESS/ERROR），不再从 origin 反推座位——机器人无会话，
-// 广播帧的 ctxData.posId 必须是真实出牌者，否则前端会把机器人出的牌
-// 全部记到 0 号座位头上（人机模式房主恰为 0 号时显示/提示全部错乱）。
+// applyPlayResult: shared by humans and bots; origin nil (bots) means no
+// SUCCESS/ERROR reply. ctxData.posId must be the real player — defaulting
+// to 0 when origin is nil credited all bot plays to seat 0 in the frontend.
 func (h *Hub) applyPlayResult(d *table.Desk, posID int, origin *Session, cards []card.Card, res game.PlayResult) {
 	g := d.Game
 
 	if res.Accepted {
 		frame, snap := playFrame(g, posID, cards, res)
-		// 一圈收分/出完接风后桌面清空（TrickTop 无牌可压）：带上清桌标记，
-		// 客户端据此清掉上一圈残留的出牌区与"要压的牌型"
+		// Table empty after a collected trick / fresh lead: flag clients to
+		// clear the play area and "shape to beat".
 		if g.Phase() == game.PhasePlaying {
 			if _, ok := g.TrickTop(); !ok {
 				frame.Clear = true
 			}
 		}
 		h.broadCastRoom(EvCtxPlayChange, d.DeskID, frame, nil)
-		d.LastPlay = snap // 断线重连时重放
+		d.LastPlay = snap
 		if !snap.IsPass {
-			d.LastValidPlay = snap // 桌面上的有效牌，过牌不覆盖
+			d.LastValidPlay = snap // standing valid play; passes don't overwrite
 		}
 		if origin != nil {
 			h.emit(origin, EvPlayCardOk, playCardSuccess{Data: nonNil(cards), TmpFeng: frame.TmpFeng, SumFeng: frame.SumFeng})
@@ -88,8 +85,7 @@ func (h *Hub) applyPlayResult(d *table.Desk, posID int, origin *Session, cards [
 	h.scheduleBotIfTurn(d)
 }
 
-// clearTrustees 终局/终止时清除托管标记并广播（托管者仍在座，仅恢复手动语义；
-// 对局已结束，前端按 GAME_OVER/FORCE_EXIT 复位界面）
+// clearTrustees: clear trustee flags at game end and broadcast.
 func (h *Hub) clearTrustees(d *table.Desk) {
 	for pos := 0; pos < table.SeatCount; pos++ {
 		if seat := d.Seat(pos); seat != nil && seat.Trustee {
@@ -99,7 +95,6 @@ func (h *Hub) clearTrustees(d *table.Desk) {
 	}
 }
 
-// clearBotSeats 终局清理机器人座位：复位为空座并广播（真人座位不受影响）
 func (h *Hub) clearBotSeats(d *table.Desk) {
 	for _, pos := range d.ClearBots() {
 		h.broadCastRoom(EvPosStatusChange, d.DeskID, posStatusChange{PosID: pos, State: 0}, nil)
@@ -111,8 +106,8 @@ func (h *Hub) clearBotSeats(d *table.Desk) {
 	}
 }
 
-// scheduleBotIfTurn 轮到机器人时安排其自动行动（开局/每次叫分与出牌后调用）。
-// 每桌至多一个在途定时器，换代时停旧表。延迟在 [min,max] 内随机（默认 1-3 秒）。
+// scheduleBotIfTurn: schedule the bot's action on a bot/trusted seat's turn;
+// one in-flight timer per desk, random delay.
 func (h *Hub) scheduleBotIfTurn(d *table.Desk) {
 	if !h.botTurn(d) {
 		return
@@ -129,7 +124,6 @@ func (h *Hub) scheduleBotIfTurn(d *table.Desk) {
 	h.botTimers[deskID] = time.AfterFunc(delay, func() { h.botAct(deskID) })
 }
 
-// botTurn 当前轮到者是否由系统代打（机器人座位或托管中的真人座位；出牌阶段才有意义）
 func (h *Hub) botTurn(d *table.Desk) bool {
 	if d.Game == nil {
 		return false
@@ -142,8 +136,8 @@ func (h *Hub) botTurn(d *table.Desk) bool {
 	return seat != nil && (seat.IsBot || seat.Trustee)
 }
 
-// botAct 机器人行动：持锁重验桌/阶段/轮到者后按策略出牌。
-// 回调由 time.AfterFunc 触发，需自行持锁。
+// botAct: runs from time.AfterFunc — takes the lock itself and re-validates
+// desk/phase/turn before playing.
 func (h *Hub) botAct(deskID int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -166,13 +160,12 @@ func (h *Hub) botAct(deskID int) {
 	var play []card.Card
 	lead := false
 	if top, ok := g.TrickTop(); ok {
-		// 智能跟牌：不吃队友大牌、炸弹按桌面分掷骰（细节见 bot.FollowSmart）
 		play = bot.FollowSmart(bot.FollowCtx{
 			Hand:          hand,
 			Top:           top,
 			TopIsTeammate: g.TrickPos()%2 == pos%2,
 			Pot:           g.TmpFeng(),
-		}) // 跟不住/掷骰未中返回 nil → 过牌
+		}) // nil = cannot/won't follow → pass
 	} else {
 		play = bot.Lead(hand)
 		lead = true
@@ -185,7 +178,7 @@ func (h *Hub) botAct(deskID int) {
 	h.applyPlayResult(d, pos, nil, play, res)
 }
 
-// resumeClient 重连坐回：恢复 session 归属并按阶段重放快照（游戏进行中才重放游戏帧）
+// resumeClient: reconnect back into the held seat and replay snapshots.
 func (h *Hub) resumeClient(c *Session, d *table.Desk) {
 	name := c.UserName()
 	hold, ok := d.Hold(name)
@@ -200,8 +193,8 @@ func (h *Hub) resumeClient(c *Session, d *table.Desk) {
 
 	c.deskID, c.posID = d.DeskID, hold.PosID
 	h.emit(c, EvReconnect, reconnectPayload{DeskID: d.DeskID, PosID: hold.PosID, PosInfo: d.Positions, HostPosID: d.HostPosID})
-	// 断线超时期间可能已被自动托管：重连即恢复手动（在途代打定时器会在
-	// botAct 持锁重验 botTurn 时发现托管已取消而自行放弃）
+	// May have been auto-trusted during the timeout: reconnect restores
+	// manual (an in-flight bot timer gives up at its botTurn re-check).
 	if seat := d.Seat(hold.PosID); seat != nil && seat.Trustee && d.GameInProgress() {
 		seat.Trustee = false
 		h.broadcastTrustee(d, hold.PosID)
@@ -218,30 +211,26 @@ func (h *Hub) resumeClient(c *Session, d *table.Desk) {
 		h.emit(c, EvGameStart, newGameStart(g))
 		h.emit(c, EvShowTopCard, showTopCard{TopCards: g.TopCards(), DizhuPosID: g.DizhuPosID(), Timeout: playTiming})
 		if d.LastPlay != nil {
-			// 上一手是过牌：桌面上仍压着本圈的有效牌，先补发它，
-			// 重连者才知道"要压什么"（否则只看到"不出"，牌面信息丢失）。
-			// 仅在游戏仍存在桌面牌可压时补发：一圈无人压牌后桌面已收分清空，
-			// 此时再补发会造成"还有牌要压"的错觉。
+			// After a pass, the standing valid play is still on the table —
+			// send it first so the reconnecter knows what to beat, but only
+			// while the table still has a beatable play.
 			_, hasTop := g.TrickTop()
 			if d.LastPlay.IsPass && d.LastValidPlay != nil && hasTop {
 				h.emit(c, EvCtxPlayChange, replayFrame(d.LastValidPlay))
 			}
-			last := replayFrame(d.LastPlay) // 重放时刷新倒计时
-			// 当前已是一圈收分/接风后的领出状态：带清桌标记，
-			// 让重连者清掉（自动重连未刷新页面时残留的）上一圈显示与牌型
+			last := replayFrame(d.LastPlay)
 			if !hasTop {
-				last.Clear = true
+				last.Clear = true // leading state: clear stale previous-trick display
 			}
 			h.emit(c, EvCtxPlayChange, last)
 		} else {
-			// 首出前掉线：无缓存帧，补发轮转帧（同叫分完成引导帧形态），
-			// 否则重连者不知道轮到自己，对局死等
+			// Disconnected before the first lead: no cached frame — send a
+			// turn frame or the game deadlocks waiting on the reconnecter.
 			h.emit(c, EvCtxPlayChange, leadFrame(g.Turn()))
 		}
 	}
 }
 
-// holdSeatForReconnect 保留掉线者座位并（若配置了时限）启动重连倒计时
 func (h *Hub) holdSeatForReconnect(d *table.Desk, userName string, posID int) {
 	d.AddHold(table.Hold{UserName: userName, PosID: posID})
 	h.broadCastRoom(EvUserMessageOut, d.DeskID, userMessage{Type: "SYS", PosID: posID, Msg: "玩家[" + userName + "]掉线，等待重连……", ID: h.nextID(), Time: now()}, nil)
@@ -251,23 +240,21 @@ func (h *Hub) holdSeatForReconnect(d *table.Desk, userName string, posID int) {
 	h.timers[userName] = time.AfterFunc(h.reconnectWait, func() { h.onReconnectTimeout(userName) })
 }
 
-// onReconnectTimeout 重连时限已过：该玩家仍未回来。
-// 对局进行中则转为自动托管继续打（出牌规则与机器人一致，保留座位可随时重连接管）；
-// 若此时已无任何真实玩家在线（全部断线超时），对局无从继续，直接按逃跑终止并落库。
-// 对局不在进行中（间隙掉线等）则仅释放座位。
+// onReconnectTimeout: mid-game the seat goes auto-trustee and the game
+// continues; if no real player is left online it's terminated as an escape;
+// outside a game the seat is just released.
 func (h *Hub) onReconnectTimeout(userName string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	d := h.lobby.DeskHolding(userName)
-	if d == nil { // 已重连或对局已结束清理
+	if d == nil { // already reconnected or cleaned up
 		return
 	}
 	hold, _ := d.Hold(userName)
-	delete(h.timers, userName) // 倒计时已到，保留记录留待重连接管或终局清理
+	delete(h.timers, userName) // hold stays for reconnect or end-of-game cleanup
 
 	if !d.GameInProgress() {
-		// 原路径：对局不在进行中，超时仅释放座位（不终止对局）
 		d.RemoveHold(userName)
 		h.releaseSeat(d, hold.PosID, nil)
 		return
@@ -275,42 +262,40 @@ func (h *Hub) onReconnectTimeout(userName string) {
 
 	deskID, posID := d.DeskID, hold.PosID
 	if h.anyRealPlayerOnline(d) {
-		// 还有别的真人在打：断线者转托管，对局继续
 		if seat := d.Seat(posID); seat != nil && !seat.IsBot && !seat.Trustee {
 			seat.Trustee = true
 			h.broadcastTrustee(d, posID)
 		}
 		h.broadCastRoom(EvUserMessageOut, deskID, userMessage{Type: "SYS", PosID: posID, Msg: "玩家[" + userName + "]断线超时，系统自动托管", ID: h.nextID(), Time: now()}, nil)
 		h.logger.Warn("玩家重连超时，转为自动托管", "user", userName, "desk", deskID, "pos", posID)
-		h.scheduleBotIfTurn(d) // 恰轮到托管者时立即安排代打
+		h.scheduleBotIfTurn(d)
 		return
 	}
 
-	// 全部真实玩家均已断线超时：无人可继续对局，直接中止（判逃跑）
+	// No real players left: abort as an escape.
 	h.logger.Warn("全部真实玩家断线超时，对局直接中止", "desk", deskID, "timeoutUser", userName)
 	d.RemoveHold(userName)
 	h.releaseSeat(d, posID, nil)
 	h.terminateGame(d, posID, userName)
 }
 
-// terminateGame 有人逃跑时终止对局：广播、重置、落库（endReason=escape）
+// terminateGame: end the game on an escape; broadcast, reset, persist.
 func (h *Hub) terminateGame(d *table.Desk, escapePos int, escapee string) {
 	h.recordGame(d, "escape")
 
 	if d.Game != nil {
-		d.UpdateOtherPos(escapePos, 1) // js 行为：空座位也会被置为 1，照抄
+		d.UpdateOtherPos(escapePos, 1) // js behavior kept: empty seats set to 1 too
 		h.broadCastRoom(EvPosStatusReset, d.DeskID, posStatusReset{Pos: d.Positions, State: 1}, nil)
 		h.broadCastRoom(EvRoomStatusChg, d.DeskID, roomStatusChange{State: 0}, nil)
 		h.broadCastRoom(EvForceExit, d.DeskID, forceExitPayload{Msg: "有玩家逃跑，游戏结束", PosID: escapePos}, nil)
 	}
 	d.ResetGame()
-	h.clearDeskPending(d) // 对局已终止，清掉本桌所有掉线保留记录
-	h.clearBotSeats(d)    // 人机局终止同样清理机器人座位
-	h.clearTrustees(d)    // 托管者座位同样恢复手动语义
+	h.clearDeskPending(d)
+	h.clearBotSeats(d)
+	h.clearTrustees(d)
 	h.logger.Warn("对局因玩家逃跑终止", "desk", d.DeskID, "user", escapee)
 }
 
-// clearDeskPending 清理某桌全部掉线保留记录并释放其座位（对局结束/终止时调用）
 func (h *Hub) clearDeskPending(d *table.Desk) {
 	for _, hold := range d.ClearHolds() {
 		if t := h.timers[hold.UserName]; t != nil {
@@ -321,8 +306,8 @@ func (h *Hub) clearDeskPending(d *table.Desk) {
 	}
 }
 
-// recordGame 把该桌当前（即将结束的）对局落库。须在对局复位（ResetGame）之前调用。
-// 玩家列表取自开局时的座位快照，不受逃跑清理/断线释放影响。
+// recordGame: must run before ResetGame; players come from the start-of-game
+// seat snapshot, unaffected by later cleanup.
 func (h *Hub) recordGame(d *table.Desk, endReason string) {
 	g := d.Game
 	if g == nil || d.StartedAt.IsZero() {
@@ -334,7 +319,7 @@ func (h *Hub) recordGame(d *table.Desk, endReason string) {
 	for _, w := range res.Winner {
 		winnerSet[w] = true
 	}
-	t0, t1 := g.TeamScores() // 全队已收分合计；正常终局胜队改用 Result.Score（含带走分）
+	t0, t1 := g.TeamScores() // winner's final score uses Result.Score on a normal finish (includes carried-off points)
 	rec := store.GameRecord{
 		DeskID:     d.DeskID,
 		StartedAt:  d.StartedAt,
@@ -360,7 +345,6 @@ func (h *Hub) recordGame(d *table.Desk, endReason string) {
 	h.enqueueSave(rec)
 }
 
-// startGame 全员准备完毕开局
 func (h *Hub) startGame(deskID int) {
 	d := h.lobby.Desk(deskID)
 	if d == nil {
@@ -376,9 +360,9 @@ func (h *Hub) startGame(deskID int) {
 	d.LastPlay = nil
 	d.Players = d.PlayerSnapshot()
 	h.broadCastRoom(EvGameStart, deskID, newGameStart(g), nil)
-	// 开局即出牌阶段：直接广播首出者与轮转帧（无叫分流程）
+	// No bidding phase: straight to the first leader + turn frame.
 	dizhu := g.DizhuPosID()
 	h.broadCastRoom(EvShowTopCard, deskID, showTopCard{TopCards: g.TopCards(), DizhuPosID: dizhu, Timeout: playTiming}, nil)
 	h.broadCastRoom(EvCtxPlayChange, deskID, leadFrame(dizhu), nil)
-	h.scheduleBotIfTurn(d) // 人机局：轮到机器人先出牌
+	h.scheduleBotIfTurn(d)
 }

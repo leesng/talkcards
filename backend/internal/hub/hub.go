@@ -1,18 +1,6 @@
-// Package hub 移植自 server.js 的 GameServer：20 桌 × 8 座的大厅/房间状态、
-// 事件路由与广播。所有事件处理在单一互斥锁下串行执行，
-// 语义对齐 Node 单线程事件循环。
-//
-// 分层：table 持桌位/对局聚合，account 持用户身份，game 持牌局状态机，
-// store 持战绩落库；hub 只做 Session 管理、事件路由（router）、
-// wire 载荷翻译（translator）与广播（broadcast）。table/game 不依赖 wssrv。
-//
-// 发送模型：每个客户端持有一条串行发送队列（pump goroutine），
-// handler 持锁期间只做载荷快照（json.Marshal）与入队，实际发送由 pump
-// 异步串行执行；连接层 Emit 本身亦非阻塞（wssrv 内部另有发送缓冲），
-// 双层保证持锁路径绝不因写死连接而卡死整个 hub。
-//
-// 持久化模型：落库经 persist.go 的异步写队列串行执行，避免 SQLite 写事务
-// 阻塞全局锁；战绩查询在锁外执行（见 onHistoryList/onHistoryDetail）。
+// Package hub: Go port of server.js GameServer. Handlers run serialized
+// under one mutex; sends are async via per-session pumps; saves are async
+// via the queue in persist.go.
 package hub
 
 import (
@@ -28,13 +16,12 @@ import (
 )
 
 const (
-	playTiming = 60 // 出牌倒计时（秒），前端倒计时随服务器下发
-	// firstPlayTiming 仅整局首轮的首出倒计时（秒）：给首出者更长的思考时间
-	firstPlayTiming = 99
-	outQueue   = 512
+	playTiming      = 60 // per-turn countdown (seconds)
+	firstPlayTiming = 99 // first lead only: extra thinking time
+	outQueue        = 512
 )
 
-// Hub 所有事件处理在 mu 下串行执行
+// Hub: handlers run serialized under mu.
 type Hub struct {
 	mu       sync.Mutex
 	sessions *sessionRegistry
@@ -42,24 +29,23 @@ type Hub struct {
 	msgSeq   int64
 	uidSeq   int64
 
-	st            *store.Store           // 战绩历史持久化
-	reconnectWait time.Duration          // 游戏中断线后的重连等待时限；<=0 表示无限等待
-	timers        map[string]*time.Timer // 断线保留倒计时（按用户名；回调须持 mu）
-	botTimers     map[int]*time.Timer    // 机器人行动定时器（按桌；回调须持 mu）
-	botDelayMin   time.Duration          // 机器人行动随机延迟下限（默认 1s）
-	botDelayMax   time.Duration          // 机器人行动随机延迟上限（默认 3s）；测试可调小加速
-	saves         chan store.GameRecord  // 异步落库队列（见 persist.go）
-	saveWG        sync.WaitGroup         // 在途落库计数，供 Flush 排空
+	st            *store.Store
+	reconnectWait time.Duration          // reconnect grace period; <=0 = wait forever
+	timers        map[string]*time.Timer // disconnect-hold countdowns; callbacks must hold mu
+	botTimers     map[int]*time.Timer    // bot action timers; callbacks must hold mu
+	botDelayMin   time.Duration
+	botDelayMax   time.Duration
+	saves         chan store.GameRecord
+	saveWG        sync.WaitGroup // in-flight saves, drained by Flush
 	logger        *slog.Logger
 }
 
-// 机器人默认行动延迟区间：真人视角下机器人"思考" 1-3 秒随机再出牌
 const (
 	botDelayMinDefault = 1 * time.Second
 	botDelayMaxDefault = 3 * time.Second
 )
 
-// SetBotDelay 设置机器人行动随机延迟区间（供 CLI 注入；min>max 时交换，<=0 取默认）
+// SetBotDelay sets the bot action delay range (CLI injection; defaults if <=0, swaps if min>max).
 func (h *Hub) SetBotDelay(minv, maxv time.Duration) {
 	if minv <= 0 || maxv <= 0 {
 		minv, maxv = botDelayMinDefault, botDelayMaxDefault
@@ -70,7 +56,7 @@ func (h *Hub) SetBotDelay(minv, maxv time.Duration) {
 	h.botDelayMin, h.botDelayMax = minv, maxv
 }
 
-// New 创建大厅（20 桌 × 8 座）；reconnectWait <= 0 表示无限等待重连。
+// New creates the lobby; reconnectWait <= 0 means wait forever.
 func New(st *store.Store, reconnectWait time.Duration, logger *slog.Logger) *Hub {
 	if logger == nil {
 		logger = slog.Default()
@@ -91,7 +77,7 @@ func New(st *store.Store, reconnectWait time.Duration, logger *slog.Logger) *Hub
 	return h
 }
 
-// Register 在 wssrv 服务上挂载全部事件路由
+// Register mounts all event routes.
 func (h *Hub) Register(srv *wssrv.Server) {
 	on(srv, EvLogin, h.logger, h.onLogin)
 	on(srv, EvSitdown, h.logger, h.onSitdown)
@@ -103,12 +89,11 @@ func (h *Hub) Register(srv *wssrv.Server) {
 	noData(srv, EvUnsitdown, h.onUnsitdown)
 	noData(srv, EvPrepare, h.onPrepare)
 	noData(srv, EvCancelPrepare, h.onCancelPrepare)
-	on(srv, EvHostStartGame, h.logger, h.onHostStartGame) // 载荷可缺省（fillBots）
-	noData(srv, EvToggleTrustee, h.onToggleTrustee)       // 托管开关（仅对局中生效）
+	on(srv, EvHostStartGame, h.logger, h.onHostStartGame) // payload may be omitted (fillBots)
+	noData(srv, EvToggleTrustee, h.onToggleTrustee)
 	srv.OnDisconnect(h.onDisconnect)
 }
 
-// on 注册带载荷事件
 func on[T any](srv *wssrv.Server, ev string, logger *slog.Logger, fn func(wssrv.Conn, T)) {
 	srv.OnEvent(ev, func(c wssrv.Conn, raw json.RawMessage) {
 		var v T
@@ -122,14 +107,11 @@ func on[T any](srv *wssrv.Server, ev string, logger *slog.Logger, fn func(wssrv.
 	})
 }
 
-// noData 注册无载荷事件
 func noData(srv *wssrv.Server, ev string, fn func(wssrv.Conn)) {
 	srv.OnEvent(ev, func(c wssrv.Conn, _ json.RawMessage) { fn(c) })
 }
 
-// ---------- 会话查询助手（调用方持锁） ----------
-
-// clientInRoom 取已登录且已入座的会话与所在桌；未登录/在大厅时返回 nil
+// clientInRoom: the logged-in seated session and its desk. Caller must hold the lock.
 func (h *Hub) clientInRoom(conn wssrv.Conn) (*Session, *table.Desk) {
 	c := h.sessions.find(conn)
 	if c == nil || c.deskID == -1 {
@@ -138,10 +120,6 @@ func (h *Hub) clientInRoom(conn wssrv.Conn) (*Session, *table.Desk) {
 	return c, h.lobby.Desk(c.deskID)
 }
 
-// ---------- 事件处理 ----------
-
-// onLogin 用户名即唯一身份：非空、不超长、不与在线重名即可登录。
-// 载荷为纯用户名字符串（json 字符串）。
 func (h *Hub) onLogin(s wssrv.Conn, name string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -160,14 +138,14 @@ func (h *Hub) onLogin(s wssrv.Conn, name string) {
 	h.emit(c, EvLoginSuccess, h.lobby.Desks)
 	h.logger.Info("有客户端登录", "user", name)
 
-	// 断线重连：该用户名有保留中的座位则自动坐回
+	// Reconnect: auto sit-back if this username has a held seat.
 	if d := h.lobby.DeskHolding(name); d != nil {
 		h.resumeClient(c, d)
 	}
 }
 
 func (h *Hub) onHistoryList(s wssrv.Conn, data historyListReq) {
-	// 取用户名后放锁查库，避免磁盘 I/O 堵塞全局锁
+	// Release the lock for the DB query, re-lock to emit.
 	h.mu.Lock()
 	c := h.sessions.find(s)
 	if c == nil {
@@ -185,7 +163,7 @@ func (h *Hub) onHistoryList(s wssrv.Conn, data historyListReq) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.sessions.find(s) == nil { // 查询期间已断开：丢弃响应
+	if h.sessions.find(s) == nil { // disconnected during the query: drop the response
 		return
 	}
 	h.emit(c, EvHistoryListOut, historyListOut{List: list, Total: total, Page: data.Page})
@@ -196,7 +174,7 @@ func (h *Hub) onHistoryList(s wssrv.Conn, data historyListReq) {
 }
 
 func (h *Hub) onHistoryDetail(s wssrv.Conn, data historyDetailReq) {
-	// 取用户名后放锁查库，避免磁盘 I/O 堵塞全局锁
+	// Release the lock for the DB query, re-lock to emit.
 	h.mu.Lock()
 	c := h.sessions.find(s)
 	if c == nil {
@@ -210,7 +188,7 @@ func (h *Hub) onHistoryDetail(s wssrv.Conn, data historyDetailReq) {
 	if err != nil {
 		h.logger.Error("查询对局详情失败", "user", userName, "gameID", data.GameID, "err", err)
 	}
-	// 只允许查看自己参与过的对局；不存在与无权限对前端统一为同一文案
+	// Only own games visible; missing and forbidden share one message.
 	joined := false
 	for _, p := range rec.Players {
 		if p.UserName == userName {
@@ -267,7 +245,6 @@ func (h *Hub) onSitdown(s wssrv.Conn, data sitdownReq) {
 	d := h.lobby.Desk(data.DeskID)
 	if d == nil || !d.IsEmpty(data.PosID) {
 		h.emit(c, EvSitdownError, loginFailPayload{Msg: "该位置已有人"})
-		// 客户端数据可能不同步，推送一次全量桌数据
 		h.emit(c, EvRefreshList, h.lobby.Desks)
 		return
 	}
@@ -279,7 +256,6 @@ func (h *Hub) onSitdown(s wssrv.Conn, data sitdownReq) {
 	c.posID = data.PosID
 
 	h.emit(c, EvSitdownSuccess, sitdownSuccess{DeskID: data.DeskID, PosID: data.PosID, PosInfo: d.Positions, HostPosID: d.HostPosID})
-	// 空桌首坐获得主持权
 	if d.AssignHost(data.PosID) {
 		h.broadCastRoom(EvHostChange, data.DeskID, hostChange{PosID: data.PosID, UserName: name}, nil)
 	}
@@ -301,7 +277,7 @@ func (h *Hub) onUnsitdown(s wssrv.Conn) {
 	deskID, posID, userName := c.deskID, c.posID, c.UserName()
 	h.exitRoom(c)
 	h.emit(c, EvUnsitSuccess, h.lobby.Desks)
-	// js 中该广播不排除发起者（broadCastRoom 未传 socket），保持一致
+	// Bug-for-bug: js did not exclude the initiator here; keep that.
 	h.broadCastRoom(EvUserMessageOut, deskID, userMessage{Type: "SYS", PosID: posID, Msg: "玩家[" + userName + "]退出房间", ID: h.nextID(), Time: now()}, nil)
 }
 
@@ -318,7 +294,7 @@ func (h *Hub) onPrepare(s wssrv.Conn) {
 	h.emitNoData(c, EvPrepareSuccess)
 	h.broadCastRoom(EvPosStatusChange, c.deskID, posStatusChange{PosID: c.posID, State: 2}, s)
 
-	// 主持模式：已入座玩家全部准备好也不自动开牌，由主持人决定何时开牌（HOST_START_GAME）
+	// Host mode: no auto-start on all-ready; the host decides.
 	if d.AllPrepared() && !d.GameInProgress() {
 		if host := d.Seat(d.HostPosID); host != nil {
 			msg := "已入座玩家全部准备完毕，等待主持人[" + host.UserName + "]开牌"
@@ -330,10 +306,8 @@ func (h *Hub) onPrepare(s wssrv.Conn) {
 	}
 }
 
-// onHostStartGame 主持人开牌：仅主持人、已入座玩家全准备且对局未进行时生效。
-// 载荷 fillBots=true 时把空位填充为机器人开局（人机模式/单人练习）；
-// 有空位但未确认填充则拒绝开牌。
-// 主持人断线（座位保留）期间主持权不变；真正离桌则由 releaseSeat 顺延给下一人。
+// onHostStartGame: host-only start; fillBots=true fills empty seats with bots.
+// Host rights persist across a disconnect (held seat); leaving hands them over.
 func (h *Hub) onHostStartGame(s wssrv.Conn, data hostStartGameReq) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -370,9 +344,8 @@ func (h *Hub) onHostStartGame(s wssrv.Conn, data hostStartGameReq) {
 	h.startGame(c.deskID)
 }
 
-// onToggleTrustee 托管开关：仅对局进行中（出牌阶段）可切换；机器人座位不可托管。
-// 开启后该座位由服务器按机器人策略代打（出牌规则与机器人完全一致），
-// 关闭后恢复手动；托管期间手动出牌会被拒绝。
+// onToggleTrustee: in-game only; bot seats excluded. While trusted out, the
+// server plays this seat with the bot strategy.
 func (h *Hub) onToggleTrustee(s wssrv.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -399,18 +372,16 @@ func (h *Hub) onToggleTrustee(s wssrv.Conn) {
 	}
 	h.broadCastRoom(EvUserMessageOut, d.DeskID, userMessage{Type: "SYS", PosID: c.posID, Msg: msg, ID: h.nextID(), Time: now()}, nil)
 	if on {
-		h.scheduleBotIfTurn(d) // 开启即轮到自己时立即安排代打
+		h.scheduleBotIfTurn(d) // may already be this seat's turn
 	}
 }
 
-// broadcastTrustee 广播某座位的托管状态变更
 func (h *Hub) broadcastTrustee(d *table.Desk, posID int) {
 	seat := d.Seat(posID)
 	h.broadCastRoom(EvTrusteeChange, d.DeskID, trusteeChange{PosID: posID, Trustee: seat.Trustee}, nil)
 }
 
-// anyRealPlayerOnline 本桌是否还有在线的真人（未断线保留、非机器人）。
-// 断线超时托管后若无任何真人在线，对局无从继续，直接按逃跑终止。
+// anyRealPlayerOnline: any online human (not held, not bot). If none, a timed-out game is terminated.
 func (h *Hub) anyRealPlayerOnline(d *table.Desk) bool {
 	for i := range d.Positions {
 		s := &d.Positions[i]
@@ -418,7 +389,7 @@ func (h *Hub) anyRealPlayerOnline(d *table.Desk) bool {
 			continue
 		}
 		if _, held := d.Hold(s.UserName); held {
-			continue // 断线保留中（含已超时托管者）
+			continue // on disconnect hold (incl. timed-out auto-trustee)
 		}
 		if h.sessions.byName(s.UserName) != nil {
 			return true
@@ -427,7 +398,6 @@ func (h *Hub) anyRealPlayerOnline(d *table.Desk) bool {
 	return false
 }
 
-// onCancelPrepare 取消准备：仅已准备且对局未开始（叫分/出牌中不可取消）时生效
 func (h *Hub) onCancelPrepare(s wssrv.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -470,15 +440,14 @@ func (h *Hub) onDisconnect(s wssrv.Conn) {
 	deskID, posID := c.deskID, c.posID
 	d := h.lobby.Desk(deskID)
 	if deskID != -1 && d != nil && d.GameInProgress() {
-		// 游戏进行中断线：保留座位与对局，限时等待重连
-		// （座位保留期间不释放，主持权不变；重连后主持人标识依旧）
+		// Mid-game disconnect: hold seat+game for reconnect; host rights unchanged.
 		h.sessions.remove(s)
 		h.holdSeatForReconnect(d, userName, posID)
 		h.logger.Warn("玩家游戏中掉线，保留座位等待重连", "user", userName, "desk", deskID, "pos", posID)
 		return
 	}
 	if deskID != -1 && d != nil {
-		h.exitRoom(c) // js: 仅入座客户端走退出流程
+		h.exitRoom(c)
 	}
 	h.sessions.remove(s)
 	if deskID != -1 {
@@ -487,17 +456,15 @@ func (h *Hub) onDisconnect(s wssrv.Conn) {
 	h.logger.Info("客户端断开连接", "user", userName)
 }
 
-// releaseSeat 释放座位并广播状态（退房/掉线超时/对局终止清理共用）。
-// exclude 传发起者连接可让其不收到 POS_STATUS_CHANGE（js 退房路径语义）。
+// releaseSeat frees a seat and broadcasts (leave / timeout / game-end shared).
 func (h *Hub) releaseSeat(d *table.Desk, posID int, exclude wssrv.Conn) {
 	if d == nil {
 		return
 	}
 	d.UpdatePos(posID, 0, ptrStr(""))
-	// 旧 js 误把 posId 当房间状态写入 updateRoomStatus(deskId, posId, 0)；
-	// 已查证前端不消费 desk.state，此处修正为语义正确的等待态 0
+	// js bug kept in check: it passed posId as the desk state; frontend never
+	// reads desk.state, so we write the correct idle 0.
 	d.SetState(0)
-	// 主持人离桌：主持权自动顺延到下一个有人的座位；全桌无人则复位为 -1
 	if newHost, changed := d.TransferHostFrom(posID); changed {
 		name := ""
 		if newHost != -1 {
@@ -509,8 +476,6 @@ func (h *Hub) releaseSeat(d *table.Desk, posID int, exclude wssrv.Conn) {
 	h.broadCastHouse(EvStatusChange, houseStatusChange{DeskID: d.DeskID, PosID: posID, State: 0, UserName: ""})
 }
 
-// exitRoom 退出/掉线超时的公共处理：释放座位、广播、逃跑终止。
-// 不修改 session 记录本身（js 中 updateClientState 由各事件自行处理）。
 func (h *Hub) exitRoom(c *Session) {
 	deskID, posID := c.deskID, c.posID
 	d := h.lobby.Desk(deskID)
@@ -519,7 +484,6 @@ func (h *Hub) exitRoom(c *Session) {
 	h.releaseSeat(d, posID, c.conn)
 	c.deskID, c.posID = -1, -1
 
-	// 游戏进行中有人逃跑：终止本局
 	if d != nil && d.GameInProgress() {
 		h.terminateGame(d, posID, c.UserName())
 	}

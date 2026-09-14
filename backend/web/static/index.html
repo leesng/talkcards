@@ -367,12 +367,6 @@
       return socket;
     }
 
-    // 通用模块：大厅座位 = 头像 + 序号一体（空位序号居中，已入座序号收至左下角）。
-    // props：
-    //   label  序号文本（seatLabel(posId)）
-    //   team   配色主题 'a'|'b'（seatTeam(posId)）
-    //   state  座位状态 0=空闲 1=已入座未准备 2=已入座已准备
-    // 事件：@sit 空位被点击（父层据此发起入座）
     Vue.component('seat-avatar', {
       props: {
         label: { type: String, default: '' },
@@ -403,14 +397,6 @@
         '</div>'
     });
 
-    // 通用模块：头像 + 序号徽标（A1~A4 / B1~B4）作为一个整体。
-    // props：
-    //   label    序号文本（如 "A1"、"B3"），由 seatLabel(posId) 给出
-    //   team     配色主题 'a'|'b'，对应 CSS .seat-badge-a/.seat-badge-b 的阵营色变量
-    //   color    可选，直接覆盖序号颜色（不传则用主题色）
-    //   glow     可选，覆盖序号光晕颜色（默认跟随 color/主题色）
-    //   isDizhu  是否地主（换头像皮肤）
-    // 想换配色/改序号规则：改 CSS 的 --seat-badge-color 或 seatLabel()，所有引用处同步生效。
     Vue.component('player-avatar', {
       props: {
         label: { type: String, default: '' },
@@ -451,26 +437,25 @@
             '我有6个王！',
             '我有12个2！',
           ],
-          msgList: [],//聊天消息
+          msgList: [],
 
-          where: 0,//0登录界面 1大厅 2房间,
-          posId: '',//座位号
-          deskId: '',//桌号
-          hostPosId: -1,//主持人座位号（第一个入座者，权限不转移）；-1=本桌无主持
-          botConfirm: { show: false, empty: 0 },//人机模式开牌确认弹窗
+          where: 0, // 0 login screen, 1 lobby, 2 room
+          posId: '',
+          deskId: '',
+          hostPosId: -1, // host seat (first sitter, never transfers); -1 = no host
+          botConfirm: { show: false, empty: 0 }, // bot-fill confirmation dialog
           desks: [],
           client: '',
-          historyPage: 1,//战绩当前页
-          // 对局统计（终局弹窗展示）：出牌手数/圈数/两队炸弹分布与最大炸弹
+          historyPage: 1,
+          // Stats shown in the end-of-game dialog: plays/tricks/bombs per team.
           gameStats: { startTime: 0, plays: 0, tricks: 0, bombs: { mine: {}, foe: {} }, maxBomb: null },
 
           cards: [],
 
-          //房间状态
           roomState: {
-            state: 0,//0准备状态 2打牌状态 3结束状态
-            ctxPos: '', //当前该哪个座位出牌 //left right or self  p0 p1 p2 p3 p4 p5 p6 p7
-            ctxCard: { //上家玩家的牌型
+            state: 0, // 0 preparing, 2 playing, 3 finished
+            ctxPos: '', // whose turn, as a direction p0-p7 relative to self
+            ctxCard: { // last played shape
               len: 0,
               key: '',
               type: '',
@@ -480,96 +465,95 @@
             timeout: 15,
 
           },
-          //座位状态
           posState: {
             top: {
               cards: []
             },
             p0:{
-              state: 0,//0没人，1未准备 2准备
+              state: 0,
               cards: [],
               ctxCards: [],
               isPass: false,
               isDizhu: false,
               isBot: false,
-              trustee: false,//托管中（系统代打，规则与机器人一致）
+              trustee: false,
               name: '游客',
               sumFeng:0,
             },
             p1:{
-              state: 0,//0没人，1未准备 2准备
+              state: 0,
               cards: [],
               ctxCards: [],
               isPass: false,
               isDizhu: false,
               isBot: false,
-              trustee: false,//托管中（系统代打，规则与机器人一致）
+              trustee: false,
               name: '游客',
               sumFeng:0,
             },
             p2:{
-              state: 0,//0没人，1未准备 2准备
+              state: 0,
               cards: [],
               ctxCards: [],
               isPass: false,
               isDizhu: false,
               isBot: false,
-              trustee: false,//托管中（系统代打，规则与机器人一致）
+              trustee: false,
               name: '游客',
               sumFeng:0,
             },
             p3:{
-              state: 0,//0没人，1未准备 2准备
+              state: 0,
               cards: [],
               ctxCards: [],
               isPass: false,
               isDizhu: false,
               isBot: false,
-              trustee: false,//托管中（系统代打，规则与机器人一致）
+              trustee: false,
               name: '游客',
               sumFeng:0,
             },
             p4:{
-              state: 0,//0没人，1未准备 2准备
+              state: 0,
               cards: [],
               ctxCards: [],
               isPass: false,
               isDizhu: false,
               isBot: false,
-              trustee: false,//托管中（系统代打，规则与机器人一致）
+              trustee: false,
               name: '游客',
               sumFeng:0,
             },
             p5:{
-              state: 0,//0没人，1未准备 2准备
+              state: 0,
               cards: [],
               ctxCards: [],
               isPass: false,
               isDizhu: false,
               isBot: false,
-              trustee: false,//托管中（系统代打，规则与机器人一致）
+              trustee: false,
               name: '游客',
               sumFeng:0,
             },
             p6:{
-              state: 0,//0没人，1未准备 2准备
+              state: 0,
               cards: [],
               ctxCards: [],
               isPass: false,
               isDizhu: false,
               isBot: false,
-              trustee: false,//托管中（系统代打，规则与机器人一致）
+              trustee: false,
               name: '游客',
               sumFeng:0,
             },
             p7:{
-              state: 0,//0没人，1未准备 2准备
+              state: 0,
               cards: [],
               ctxCards: [],
               isPass: false,
               isDizhu: false,
               isBot: false,
-              trustee: false,//托管中（系统代打，规则与机器人一致）
+              trustee: false,
               name: '游客',
               sumFeng:0,
             },
@@ -577,15 +561,15 @@
         }
       },
       computed: {
-        // 本方（自己队 = p1/p3/p5/p7 锚位，即奇数座位）总得分
+        // My team (odd seats p1/p3/p5/p7) captured score.
         myFeng: function () {
           return this.posState.p1.sumFeng + this.posState.p3.sumFeng + this.posState.p5.sumFeng + this.posState.p7.sumFeng;
         },
-        // 对方（偶数座位）总得分
         opFeng: function () {
           return this.posState.p0.sumFeng + this.posState.p2.sumFeng + this.posState.p4.sumFeng + this.posState.p6.sumFeng;
         },
-        // 得分 = 已出完手牌（cards.length === 0）队友收取的分之和，计入胜负线（见 game-rules.md 抓分与得分）
+        // Score = sum of captured points of teammates who ran out of cards
+        // (see game-rules.md scoring).
         myScore: function () {
           var sum = 0;
           ['p1', 'p3', 'p5', 'p7'].forEach(function (d) {
@@ -602,11 +586,11 @@
           }, this);
           return sum;
         },
-        // 是否主持人（第一个入座者；主持权不转移，主持人离桌/断线权限保留）
+        // Host = first sitter; the role never transfers, even on leave/disconnect.
         isHost: function () {
           return this.hostPosId !== -1 && this.hostPosId === this.posId;
         },
-        // 已入座玩家全部准备好（空座不阻塞；人未齐时主持人可开牌填充机器人）
+        // All seated players ready; empty seats don't block (host may fill them with bots).
         allPrepared: function () {
           for (var i = 0; i < 8; i++) {
             var direct = this.getDirectionByPosId(i);
@@ -642,7 +626,7 @@
             layer.msg(data.msg);
           }.bind(this));
 
-          // 断线重连：自动回到未结束的对局（后续 GAME_START 等帧会重放恢复状态）
+          // Reconnect resumes an unfinished game; later GAME_START etc. replay restores state.
           this.client.on('RECONNECT', function (data) {
             this.where = 2;
             this.posId = data.posId;
@@ -695,18 +679,18 @@
             this.updatePosStatus(data.posId, data.state, data.userName, data.isBot, data.trustee);
           }.bind(this));
 
-          // 主持权变更：空桌首坐获得主持权，全桌清空时复位（权限不转移）
+          // Host change: first sitter of an empty table gains host, reset when it empties.
           this.client.on('HOST_CHANGE', function (data) {
             this.hostPosId = (data && typeof data.posId === 'number') ? data.posId : -1;
           }.bind(this));
 
 
-          // 托管状态变更：手动开关 / 断线超时自动托管 / 重连取消托管
+          // Trustee change: manual toggle / auto on timeout / cleared on reconnect.
           this.client.on('TRUSTEE_CHANGE', function (data) {
             var direct = this.getDirectionByPosId(data.posId);
             this.posState[direct].trustee = !!data.trustee;
-            // 仅对局进行中提示；终局清托管（GAME_OVER 随后帧）不弹——
-            // layer.msg 是 type:0 对话框，会触发 closeAll("dialog") 顶掉结果弹窗
+            // Toast only mid-game: layer.msg is a type:0 dialog whose close
+            // triggers closeAll("dialog") and would kill the result popup.
             if (data.posId === this.posId && this.roomState.state === 2) {
               layer.msg(data.trustee ? '已开启托管，系统代打中' : '已取消托管，恢复手动操作');
             }
@@ -742,11 +726,10 @@
             layer.closeAll();
           }.bind(this));
 
-          //游戏开始
           this.client.on('GAME_START', function (data) {
 
-            // 初始化数据（开局即出牌阶段，state 由随后的 SHOW_TOP_CARD 置 2）
-            this.botConfirm.show = false;//开局后关闭人机模式确认弹窗（若仍打开）
+            // The game starts straight in the play phase; SHOW_TOP_CARD sets state 2.
+            this.botConfirm.show = false;
             this.initCards(data.cards);
             this.resetGameStats();
 
@@ -800,12 +783,11 @@
           }.bind(this));
 
 
-          //显示底牌事件
           this.client.on('SHOW_TOP_CARD', function (data) {
             this.roomState.state = 2;
             var direct = this.getDirectionByPosId(data.dizhuPosId);
-            // 新一局首出：清空上一局残留牌型，并把首出者记为"上一手出牌人"，
-            // 这样"不出"按钮/自动出牌/提示都按自由首出处理（否则会误判为跟牌）
+            // First lead of a game: clear stale shapes and record the leader as
+            // the "last player" so pass/auto-play/hints treat it as a free lead.
             this.roomState.ctxCard = { len: 0, key: '', type: '', ctxPos: direct };
             if (direct == 'p3') {
               data.topCards.forEach(function (card) {
@@ -833,7 +815,7 @@
               this.posState[tmpDirect].sumFeng = data.sumFeng[i];
             }
             this.roomState.tmpFeng = data.tmpFeng;
-            // 对局统计（终局弹窗展示）：clear=一圈打完；重连重放帧不重复计数
+            // Stats: clear marks a finished trick; replay frames are not counted twice.
             if (data.clear) { this.gameStats.tricks++; }
             if (!data.replay && !data.isPass) {
               this.trackPlay(data.ctxData.posId, data.ctxData.cards);
@@ -844,9 +826,9 @@
               this.roomState.ctxCard.type = data.ctxData.type;
               this.roomState.ctxCard.ctxPos = direct;
             }
-            // 一圈收分/接风后桌面已清空（clear 标记）：清掉上一圈各家残留的
-            // 出牌/过牌显示并重置"要压的牌型"——否则"不出"按钮/超时自动出牌/
-            // 提示都会误判为还要压上一圈的牌。出完牌者的最后一手保留展示。
+            // After a trick is collected (clear), drop stale played/pass displays
+            // and reset the shape to beat, or pass/auto-play/hints would wrongly
+            // try to beat last trick's cards. The finisher's last play stays shown.
             if (data.clear) {
               for (var ci = 0; ci < 8; ci++) {
                 var cd = this.getDirectionByPosId(ci);
@@ -857,13 +839,12 @@
               }
               this.roomState.ctxCard = { len: 0, key: '', type: '', ctxPos: '' };
             }
-            // 重连重放帧：手牌已由随后的 GAME_START 快照给出最新状态，
-            // 不能再从手里扣一次（一副牌 6 张同值同花色重复，误扣会导致手牌脱同步）
+            // Replay frames: the GAME_START snapshot already holds the latest
+            // hand; deducting again would desync (6 identical cards per deck).
             if (!data.replay) {
               this.removeCards(direct, data.ctxData.cards);
             }
             this.roomState.ctxPos = this.getDirectionByPosId(data.posId);
-            //如果是自己出牌就清空上一轮自己出的牌
             if (this.roomState.ctxPos === 'p3') {
               this.posState.p3.ctxCards = [];
             }
@@ -883,25 +864,25 @@
           }.bind(this))
 
           this.client.on('GAME_OVER', function (data) {
-            // 分牌分值：5 计 5 分，10/K 计 10 分（与 internal/card/dict.go 一致）
+            // Point cards: 5 counts 5, 10/K count 10 (matches internal/card/dict.go).
             var cardScore = function (v) { return v === 5 ? 5 : (v === 10 || v === 13 ? 10 : 0); };
-            // 剩余手牌中的分牌总分（未出完者的分按规则记入对方）
+            // Point total left in a hand (credited to the opponent by rule).
             var leftoverScore = function (direct) {
               return this.posState[direct].cards.reduce(function (s, c) { return s + cardScore(c.value); }, 0);
             }.bind(this);
 
-            // 全队出完的胜局才带走对方未出手分牌；300 分终局胜队未出完，不带
-            // （server 侧 isGameOver 同逻辑；winner 恒为 4 人，不能用于判别）
-            // 按队聚合：mine = 本方（p1/p3/p5/p7），foe = 对方（p0/p2/p4/p6）
+            // Only an all-out winning team takes the losers' unplayed point cards;
+            // a 300-point win keeps them (mirrors server isGameOver; winner is always
+            // 4 players so it can't distinguish). mine = odd seats, foe = even seats.
             var teams = [
               { key: 'mine', label: '本方', dirs: ['p1', 'p3', 'p5', 'p7'] },
               { key: 'foe', label: '对方', dirs: ['p0', 'p2', 'p4', 'p6'] }
             ];
             teams.forEach(function (t) {
-              t.leftover = 0;   // 未出完者剩牌中的分牌分
-              t.stuckScore = 0; // 未出完者已抓但未兑现的分（跑完方全出时收走）
+              t.leftover = 0; // unplayed point cards of stuck members
+              t.stuckScore = 0; // captured-but-unbanked score of stuck members
               t.allOut = true;
-              t.outScore = 0;  // 已出完成员的得分之和（未出完者记 0 分）
+              t.outScore = 0; // banked score of finished members (stuck score 0)
               t.members = t.dirs.map(function (d) {
                 var p = this.posState[d];
                 var out = p.cards.length === 0;
@@ -916,8 +897,9 @@
                 return { d: d, name: p.name, out: out, left: p.cards.length, score: score };
               }.bind(this));
             }.bind(this));
-            // 最终总分：仅当一方全部跑完、对方未跑完时，跑完方收走对方未跑完玩家
-            // 的剩牌分牌分与已抓未兑现的分；其余情况总分 = 本队出完玩家得分之和
+            // Final: only when one side is all out and the other is not, the all-out
+            // side takes the losers' leftover points and unbanked score; otherwise the
+            // final score is just the sum of finished members' scores.
             var mineTeam = teams[0];
             var foeTeam = teams[1];
             var winnerIsMine = mineTeam.dirs.indexOf(this.getDirectionByPosId(data.winner[0])) > -1;
@@ -928,14 +910,12 @@
               : winT.outScore;
             loseT.final = loseT.outScore;
 
-            // 布局固定：左侧本方、右侧对方；胜负用卡片背景水印与配色表达
             var winnerDir = this.getDirectionByPosId(data.winner[0]);
-            // MVP：胜队中得分最高的出完玩家（并列都标）
+            // MVP: highest-scoring finished player of the winning team (ties all marked).
             var winTeam = teams.filter(function (t) { return t.dirs.indexOf(winnerDir) > -1; })[0];
             var mvpMax = 0;
             winTeam.members.forEach(function (m) { if (m.out && m.score > mvpMax) mvpMax = m.score; });
 
-            // ---- 队伍卡片：左右并排（左=本方蓝、右=对方红），成员行三列对齐 ----
             var content = '<div class="ov"><div class="ov-teams">';
             teams.forEach(function (t) {
               var isWinnerTeam = t.dirs.indexOf(winnerDir) > -1;
@@ -957,9 +937,7 @@
             }.bind(this));
             content += '</div>';
 
-            // ---- 对局统计：时长 / 轮数 / 出牌手数 / 最大炸弹 / 两队炸弹分布 ----
             var st = this.gameStats;
-            // 本局时长：时:分:秒（开局时刻缺失则显示 —）
             var dur = '—';
             if (st.startTime) {
               var sec = Math.max(0, Math.floor((Date.now() - st.startTime) / 1000));
@@ -987,7 +965,7 @@
               skin: 'ov-layer',
               area: ['620px', 'auto'],
               content: content,
-              // 关闭弹窗后清除桌面：出牌区域的剩牌/最后一手展示全部清空
+              // Clear the table when the dialog closes.
               end: function () {
                 for (var cd = 0; cd < 8; cd++) {
                   var dd = this.getDirectionByPosId(cd);
@@ -997,10 +975,10 @@
               }.bind(this)
             });
 
-            this.startTimer(false);//停止计时器
+            this.startTimer(false);
             this.roomState.state = 3;
-            // 终局展示：未出完玩家的剩余手牌直接放进其出牌区域（牌面升序），
-            // 已出完者保留最后一手出牌展示
+            // Show stuck players' remaining hands in their play area; finished
+            // players keep their last play displayed.
             for (var od = 0; od < 8; od++) {
               var dd = this.getDirectionByPosId(od);
               if (this.posState[dd].cards.length > 0) {
@@ -1049,7 +1027,6 @@
             })
           }.bind(this));
 
-          // 战绩列表弹层（行点击查看单局详情）
           this.client.on('HISTORY_LIST', function (data) {
             layer.closeAll();
             var self = this;
@@ -1089,7 +1066,6 @@
             });
           }.bind(this));
 
-          // 单局详情弹层
           this.client.on('HISTORY_DETAIL', function (data) {
             layer.closeAll();
             var html = '<div class="history-box">'
@@ -1115,14 +1091,13 @@
         }.bind(this));
       },
       methods: {
-        // ---- 对局统计（终局弹窗展示）----
-        // 开局重置；断线重连期间漏掉的出牌不计，属可接受的展示误差
+        // Reset stats at game start; plays missed during a reconnect are an
+        // acceptable display error.
         resetGameStats: function () {
           var empty = function () { return { b4: 0, b5: 0, b6: 0, b7: 0, king: 0 }; };
-          // startTime 记录开局时刻，终局弹窗展示本局时长
           this.gameStats = { startTime: Date.now(), plays: 0, tricks: 0, bombs: { mine: empty(), foe: empty() }, maxBomb: null };
         },
-        // 记录一手出牌：手数、炸弹归属与全场最大炸弹
+        // Track one play: count, bomb attribution, biggest bomb so far.
         trackPlay: function (posId, cards) {
           var s = this.gameStats;
           s.plays++;
@@ -1133,14 +1108,14 @@
           var isBomb = isKing || (n >= 4 && vals.every(function (v) { return v === vals[0]; }));
           if (isBomb) {
             s.bombs[side][isKing ? 'king' : (n >= 7 ? 'b7' : 'b' + n)]++;
-            // 最大炸弹：先比张数再比牌面（王炸同张数压普通炸，多王压少王）
+            // Biggest bomb: compare count first, then face (king bombs beat
+            // regular bombs at equal count; more jokers beat fewer).
             var rank = isKing ? 100 + n : vals[0];
             if (!s.maxBomb || n > s.maxBomb.n || (n === s.maxBomb.n && rank > s.maxBomb.rank)) {
               s.maxBomb = { n: n, rank: rank, king: isKing };
             }
           }
         },
-        // 炸弹文案：王炸 → "N×王"，普通 → "N×A"
         bombText: function (b) {
           if (b.king) { return b.n + '×王'; }
           var face = { 11: 'J', 12: 'Q', 13: 'K', 14: 'A', 15: '2' }[b.rank] || b.rank;
@@ -1162,9 +1137,8 @@
           layer.load({ type: 3 });
           this.client.emit('LOGIN', this.posState.p3.name);
         },
-        // 我的战绩：弹层列表 + 行点击查看详情
         showHistory: function (page) {
-          page = parseInt(page, 10) || 1; // 防御事件对象/undefined 入参
+          page = parseInt(page, 10) || 1; // guard against event objects/undefined
           this.historyPage = page;
           layer.load({ type: 3 });
           this.client.emit('HISTORY_LIST', { page: page });
@@ -1220,17 +1194,14 @@
             pos.userName = userName;
           }
         },
-        // 通过posId获取是哪个方向的坐位
-        // 座位阵营编号：偶数队 A1-A4，奇数队 B1-B4
         seatLabel: function (posId) {
           return posId % 2 === 0 ? 'A' + (posId / 2 + 1) : 'B' + ((posId + 1) / 2);
         },
-        // 序号配色主题：偶数队 a，奇数队 b（对应 CSS .seat-badge-a/.seat-badge-b）
         seatTeam: function (posId) {
           return posId % 2 === 0 ? 'a' : 'b';
         },
-        // 房间里的 p0-p7 是相对自己座位的"方向"，不是固定 posId：
-        // 反查该方向对应的真实座位号，编号才能跟着玩家（座位）走
+        // Room p0-p7 are directions relative to one's own seat, not fixed posIds;
+        // map a direction back to its real seat so labels follow the player.
         posIdByDirection: function (d) {
           for (var posId = 0; posId < 8; posId++) {
             if (this.getDirectionByPosId(posId) === 'p' + d) {
@@ -1330,9 +1301,9 @@
           if (name) {
             this.posState[direct].name = name;
           }
-          // 人机模式：机器人座位带角标；座位清空时复位角标
+          // Bot badge shows while seated; reset when the seat empties.
           this.posState[direct].isBot = state > 0 ? !!isBot : false;
-          // 托管角标：座位清空时一并复位
+          // Trustee badge resets with the seat too.
           this.posState[direct].trustee = state > 0 ? !!trustee : false;
           this.posState[direct].isDizhu = false;
           this.startTimer(false);
@@ -1398,11 +1369,10 @@
 
           this.client.emit('PLAY_CARD', cards);
         },
-        // 不出
         passCards: function () {
           this.client.emit('PLAY_CARD', [])
         },
-        // 提示：自动选中刚好大过上家的一手牌（仅选中，不代替出牌）
+        // Hint: auto-select the tightest group beating the last play (selection only).
         hintCards: function () {
           if (this.roomState.state !== 2) {
             return;
@@ -1410,11 +1380,12 @@
           if (this.roomState.ctxPos !== 'p3') {
             return;
           }
-          // 上家牌型为"自己"或已清空时视为自由首出
+          // Last shape "self" or cleared means a free lead.
           var ctx = this.roomState.ctxCard;
           var hand = this.posState.p3.cards;
           var topShape = ctx.ctxPos && ctx.ctxPos !== 'p3' ? parseShape(ctx.type, ctx.key, ctx.len) : null;
-          // 上一有效出牌是队友（同奇偶队）时不给选牌提示，弹自消失提示框建议过牌
+          // Don't hint when the last valid play was a teammate's (same-parity team);
+          // show a self-dismissing toast suggesting a pass instead.
           if (topShape) {
             var lastPosId = this.posIdByDirection(Number(ctx.ctxPos.slice(1)));
             if (lastPosId % 2 === this.posId % 2) {
@@ -1438,20 +1409,22 @@
           });
         },
         autoPlayCards: function () {
-          // 托管中由服务器代打，客户端倒计时到点不再自动出牌（避免与代打竞态越序）
+          // Under trustee the server plays; the client countdown must not auto-play
+          // (would race the bot and play out of turn).
           if (this.posState.p3.trustee) {
             return;
           }
           if (this.roomState.ctxPos === 'p3') {
-            // 桌面无牌（自己领出，含重连后新一圈领出）时只能出牌，不能过牌；
-            // 有桌面牌且不是自己出的才能过牌
+            // Leading (no table cards, incl. leading a new trick after reconnect)
+            // you must play; you may only pass when the table has someone else's cards.
             var leading = !this.roomState.ctxCard.ctxPos || this.roomState.ctxCard.ctxPos === 'p3';
             var hand = this.posState.p3.cards;
             var cards = leading && hand.length ? [hand[0]] : [];
             this.client.emit('PLAY_CARD', cards);
           }
         },
-        // 托管开关：仅对局进行中生效（服务器校验），出牌规则与机器人一致
+        // Trustee toggle: only effective mid-game (server validates); the bot
+        // rules apply.
         toggleTrustee: function () {
           this.client.emit('TOGGLE_TRUSTEE');
         },
@@ -1463,8 +1436,9 @@
           layer.load({ type: 3 });
           this.client.emit('CANCEL_PREPARE');
         },
-        // 主持人开牌：全员已准备后由主持人触发开局（服务器校验主持权与准备状态）。
-        // 人未齐（有空位）时先弹窗确认是否将空位填充为机器人（人机模式/单人练习）
+        // Host starts the game once everyone is ready (server validates host
+        // rights and readiness). With empty seats, first confirm filling them
+        // with bots (bot mode / solo practice).
         hostStartGame: function () {
           var empty = 0;
           for (var i = 0; i < 8; i++) {
@@ -1476,17 +1450,16 @@
           }
           this.client.emit('HOST_START_GAME');
         },
-        // 人机模式确认：填充机器人并开牌
         confirmBotFill: function () {
           this.botConfirm.show = false;
           this.client.emit('HOST_START_GAME', { fillBots: true });
         },
-        // 人机模式取消：继续等待真人
         cancelBotFill: function () {
           this.botConfirm.show = false;
         },
-        // 该方位槽位是否坐着主持人：入参是屏幕方位序号（0-7，p3=自己），
-        // 需把主持人的绝对座位号映射到方位槽再比较，不能直接拿 hostPosId 比
+        // Whether this direction slot holds the host: the argument is a screen
+        // direction (0-7, p3=self), so map the host's absolute seat to a direction
+        // before comparing — hostPosId can't be compared directly.
         isHostPos: function (dir) {
           if (this.hostPosId === -1) return false;
           return this.getDirectionByPosId(this.hostPosId) === 'p' + dir;

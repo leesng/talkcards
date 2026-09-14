@@ -1,5 +1,5 @@
-// Package logging slog 日志初始化：按级别/格式构建 *slog.Logger。
-// 默认输出到 stderr（与原标准库 log 的默认去向一致）。
+// Package logging builds slog loggers from level/format options.
+// Defaults to stderr, matching the standard library log default.
 package logging
 
 import (
@@ -10,15 +10,15 @@ import (
 	"strings"
 )
 
-// Options 日志初始化选项
 type Options struct {
-	Level  string // debug|info|warn|error（大小写不敏感），空为 info
-	Format string // text|json，空为 text
+	Level  string // debug|info|warn|error (case-insensitive), empty = info
+	Format string // text|json, empty = text
 
-	out io.Writer // 输出目标；测试注入用，nil 为 stderr
+	out io.Writer // injected by tests; nil = stderr
 }
 
-// New 按选项构建 *slog.Logger；级别或格式非法时返回错误（由调用方决定是否致命）。
+// New builds a *slog.Logger; invalid level or format returns an error
+// (fatality is the caller's decision).
 func New(opts Options) (*slog.Logger, error) {
 	level := slog.LevelInfo
 	if opts.Level != "" {
