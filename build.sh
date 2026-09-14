@@ -6,8 +6,26 @@
 #                           前端静态资源用磁盘上的 web/static（--static-dir），便于改前端即刷即用
 #       ./build.sh test    构建本机架构二进制并跑完整对局审计（scripts/e2e-audit.js）
 #                           端口可用 TEST_PORT 覆盖，默认 8765
+#       ./build.sh --upx [goos] [goarch]
+#                           构建完成后用 upx -5 压缩产物（需 PATH 里有 upx）
 set -euo pipefail
 cd "$(dirname "$0")/backend"
+
+# --upx 标志：构建完成后用 upx -5 压缩产物（可与目标平台参数混用，如 ./build.sh linux arm64 --upx）
+USE_UPX=0
+args=()
+for a in "$@"; do
+  if [[ "${a}" == "--upx" ]]; then
+    USE_UPX=1
+  else
+    args+=("${a}")
+  fi
+done
+set -- "${args[@]}"
+if [[ ${USE_UPX} -eq 1 ]] && ! command -v upx >/dev/null 2>&1; then
+  echo "ERROR: 指定了 --upx 但未安装 upx（https://upx.github.io）" >&2
+  exit 1
+fi
 
 # run 子命令：不构建二进制，go run 直启；静态资源走磁盘 web/static（非嵌入）
 if [[ "${1:-}" == "run" ]]; then
@@ -32,6 +50,10 @@ if [[ "${1:-}" == "test" ]]; then
   CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
     go build -trimpath -ldflags "${LDFLAGS}" -o "${out}" ./cmd/server
   echo "target/talkcards-${goos}-${goarch}  $(du -h "${out}" | cut -f1)  (${VERSION})"
+  if [[ ${USE_UPX} -eq 1 ]]; then
+    upx -5 --quiet "${out}"
+    echo "  upx -5 压缩后  $(du -h "${out}" | cut -f1)"
+  fi
 
   PORT="${TEST_PORT:-8765}"
   SRV_LOG="$(mktemp /tmp/gtp-audit-server.XXXXXX.log)"
@@ -88,4 +110,8 @@ for t in "${targets[@]}"; do
   CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
     go build -trimpath -ldflags "${LDFLAGS}" -o "${out}" ./cmd/server
   echo "target/$(basename "${out}")  $(du -h "${out}" | cut -f1)  (${VERSION})"
+  if [[ ${USE_UPX} -eq 1 ]]; then
+    upx -5 --quiet "${out}"
+    echo "  upx -5 压缩后  $(du -h "${out}" | cut -f1)"
+  fi
 done
