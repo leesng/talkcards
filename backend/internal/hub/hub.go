@@ -28,7 +28,9 @@ import (
 )
 
 const (
-	playTiming = 45 // 出牌/叫分倒计时（秒），与 js 一致
+	playTiming = 60 // 出牌倒计时（秒），前端倒计时随服务器下发
+	// firstPlayTiming 仅整局首轮的首出倒计时（秒）：给首出者更长的思考时间
+	firstPlayTiming = 99
 	outQueue   = 512
 )
 

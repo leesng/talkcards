@@ -1,6 +1,7 @@
 package table
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +85,31 @@ func TestFillBotsAndClearBots(t *testing.T) {
 		if !s.IsBot || s.State != 2 || s.UserName == "" {
 			t.Fatalf("座位 %d 应为已准备机器人", p)
 		}
+		// 名字格式："机" + 62 进制自增串（0-9a-zA-Z），不足 3 位补零占位
+		if !strings.HasPrefix(s.UserName, "机") {
+			t.Fatalf("机器人名应以「机」开头，实际 %q", s.UserName)
+		}
+		suffix := strings.TrimPrefix(s.UserName, "机")
+		if len(suffix) < 3 {
+			t.Fatalf("机器人名后缀应至少 3 位（补零占位），实际 %q", s.UserName)
+		}
+		if suffix == "" {
+			t.Fatalf("机器人名后缀不应为空")
+		}
+		for _, r := range suffix {
+			if !strings.ContainsRune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", r) {
+				t.Fatalf("机器人名后缀含非法字符 %q", r)
+			}
+		}
+	}
+	// 同一次填充内名字互不相同
+	seen := map[string]bool{}
+	for _, p := range filled {
+		n := d.Seat(p).UserName
+		if seen[n] {
+			t.Fatalf("机器人名重复 %q", n)
+		}
+		seen[n] = true
 	}
 	if s := d.Seat(3); s.IsBot {
 		t.Fatalf("真人座位不应被标记为机器人")
@@ -171,4 +197,3 @@ func TestDeskLookupBoundsAndSnapshot(t *testing.T) {
 		t.Fatalf("越界座位号应返回 nil")
 	}
 }
-

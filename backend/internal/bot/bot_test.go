@@ -40,6 +40,9 @@ func TestLeadAtomicGroup(t *testing.T) {
 		{"小对压过大单先出", mk(10, 4, 4), []int{4, 4}},
 		{"小三压过大单先出", mk(10, 5, 5, 5), []int{5, 5, 5}},
 		{"小牌出尽才出大对", mk(6, 6, 10, 10), []int{6, 6}},
+		// 自由首出：≤8 双/三优先于 >10 的单/双
+		{"小双压过大于10的单先出", mk(11, 4, 4), []int{4, 4}},
+		{"小三压过大于10的双先出", mk(5, 5, 5, 12, 12), []int{5, 5, 5}},
 	}
 	for _, c := range cases {
 		if got := faces(Lead(c.hand)); !reflect.DeepEqual(got, c.want) {
@@ -92,7 +95,6 @@ func TestBombOrdering(t *testing.T) {
 		t.Fatalf("同张数应先出小牌面，实际 %v", cands)
 	}
 }
-
 
 // rngIs 构造恒返回 v 的随机源
 func rngIs(v float64) func() float64 { return func() float64 { return v } }
@@ -181,5 +183,51 @@ func TestFollowSmartBombChance(t *testing.T) {
 	hand := append(mk(7, 7), bomb4x6...)
 	if cs := FollowSmart(FollowCtx{Hand: hand, Top: pair5, Pot: 0, Rand: rngIs(0.99)}); !reflect.DeepEqual(faces(cs), []int{7, 7}) {
 		t.Fatalf("有对7可跟时不应掷骰出炸弹，实际 %v", faces(cs))
+	}
+}
+
+// TestFollowSmartSplitHighPair 高牌对子拆牌：无整组常规牌能压对手单牌时，
+// A/2/大小王的恰 2 张对子可拆一张单跟（另一张留手）
+func TestFollowSmartSplitHighPair(t *testing.T) {
+	singleK := card.Shape{Kind: card.KindSingle, Rank: 13, Len: 1}
+	pairK := card.Shape{Kind: card.KindPair, Rank: 13, Len: 2}
+	singleA := card.Shape{Kind: card.KindSingle, Rank: 14, Len: 1}
+	singleJo := card.Shape{Kind: card.KindSingle, Rank: 16, Len: 1}
+	single3 := card.Shape{Kind: card.KindSingle, Rank: 3, Len: 1}
+	triple2 := card.Shape{Kind: card.KindTriple, Rank: 15, Len: 3}
+
+	cases := []struct {
+		name string
+		ctx  FollowCtx
+		want []int // nil = 过牌
+	}{
+		// 对子拆单跟单（A/2/小王/大王）
+		{"对手单K拆对A出单", FollowCtx{Hand: mk(14, 14, 5), Top: singleK, Rand: rngIs(0.99)}, []int{14}},
+		{"对手单A拆对2出单", FollowCtx{Hand: mk(15, 15), Top: singleA, Rand: rngIs(0.99)}, []int{15}},
+		{"对手单K拆对小王出单", FollowCtx{Hand: mk(16, 16), Top: singleK, Rand: rngIs(0.99)}, []int{16}},
+		{"对手单小王拆对大王出单", FollowCtx{Hand: mk(17, 17), Top: singleJo, Rand: rngIs(0.99)}, []int{17}},
+		// 有更小的整组常规牌可压时不拆，走常规跟牌
+		{"有单5可跟不拆对A", FollowCtx{Hand: mk(5, 14, 14), Top: single3, Rand: rngIs(0.99)}, []int{5}},
+		// 对双顶走整组（对 A 整体压对 K），不拆
+		{"对手双K对A整组压", FollowCtx{Hand: mk(14, 14), Top: pairK, Rand: rngIs(0.99)}, []int{14, 14}},
+		// 低牌对子不拆：只有 <A 的对且无整组可压 → 过牌
+		{"低牌对9不拆", FollowCtx{Hand: mk(9, 9), Top: singleK, Rand: rngIs(0.99)}, nil},
+		// 三条不再拆（原三条拆牌规则已移除）：3 张 A 压不住单 K → 过牌
+		{"三条A不拆", FollowCtx{Hand: mk(14, 14, 14), Top: singleK, Pot: 0, Rand: rngIs(0.99)}, nil},
+		{"三条2不拆", FollowCtx{Hand: mk(15, 15, 15), Top: singleA, Pot: 0, Rand: rngIs(0.99)}, nil},
+		// 4 张 A 是炸弹走掷骰（无分未中 → 过牌；必压档直接炸弹）
+		{"4张A不拆走炸弹掷骰", FollowCtx{Hand: mk(14, 14, 14, 14), Top: singleK, Pot: 0, Rand: rngIs(0.99)}, nil},
+		{"4张A必压档直接炸弹", FollowCtx{Hand: mk(14, 14, 14, 14), Top: singleK, Pot: 100, Rand: rngIs(0.99)}, []int{14, 14, 14, 14}},
+		// 非单顶不拆：三顶走整组比较，压不住过牌
+		{"对手三2压不住A对过牌", FollowCtx{Hand: mk(14, 14, 5), Top: triple2, Pot: 0, Rand: rngIs(0.99)}, nil},
+	}
+	for _, c := range cases {
+		var got []int
+		if cs := FollowSmart(c.ctx); cs != nil {
+			got = faces(cs)
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
 	}
 }

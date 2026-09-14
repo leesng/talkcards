@@ -44,8 +44,8 @@ func main() {
 		logLevel         = flag.String("log-level", "info", "日志级别：debug|info|warn|error")
 		logFormat        = flag.String("log-format", "text", "日志格式：text|json")
 		staticDir        = flag.String("static-dir", "", "前端静态资源目录（磁盘加载，替代嵌入资源；缺省用嵌入的 web/static）")
-		botDelayMinMs    = flag.Int("bot-delay-min-ms", 200, "机器人出牌/叫分随机延迟下限（毫秒）")
-		botDelayMaxMs    = flag.Int("bot-delay-max-ms", 500, "机器人出牌/叫分随机延迟上限（毫秒），测试可调小加速")
+		botDelayMinMs    = flag.Int("bot-delay-min-ms", 50, "机器人出牌/叫分随机延迟下限（毫秒）")
+		botDelayMaxMs    = flag.Int("bot-delay-max-ms", 150, "机器人出牌/叫分随机延迟上限（毫秒），测试可调小加速")
 		showVersion      = flag.BoolP("version", "v", false, "打印版本并退出")
 	)
 	flag.Parse()
@@ -112,8 +112,41 @@ func main() {
 
 	addr := net.JoinHostPort(*host, *port)
 	logger.Info("服务启动", "version", version, "addr", addr, "db", *dbPath)
+
+	// 打印可点击访问地址：本机回环 + 所有非回环 IPv4（局域网 IP，方便他人直连）
+	printAccessURLs(logger, *host, *port)
 	if err := e.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("服务异常退出", "err", err)
 		os.Exit(1)
+	}
+}
+
+// printAccessURLs 启动时打印可直接点击访问的地址：
+// host 非空时只打印该地址；否则打印回环地址 + 所有非回环 IPv4（局域网 IP）。
+func printAccessURLs(logger *slog.Logger, host, port string) {
+	if host != "" {
+		logger.Info(fmt.Sprintf("访问地址: http://%s", net.JoinHostPort(host, port)))
+		return
+	}
+	logger.Info(fmt.Sprintf("访问地址: http://127.0.0.1:%s", port))
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if ipNet, ok := a.(*net.IPNet); ok {
+				if ip := ipNet.IP.To4(); ip != nil {
+					logger.Info(fmt.Sprintf("访问地址: http://%s", net.JoinHostPort(ip.String(), port)))
+				}
+			}
+		}
 	}
 }

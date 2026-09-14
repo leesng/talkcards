@@ -59,7 +59,7 @@ func Lead(hand []card.Card) []card.Card {
 		if len(cs) > 3 {
 			break // 之后只剩炸弹组，不参与小牌优先
 		}
-		if cs[0].Face <= 8 && (best == -1 || cs[0].Face < cands[best][0].Face) {
+		if cs[0].Face <= smallTopRankMax && (best == -1 || cs[0].Face < cands[best][0].Face) {
 			best = i
 		}
 	}
@@ -95,11 +95,13 @@ type FollowCtx struct {
 
 // FollowSmart 智能跟牌（非首出时）：
 //  1. 队友的牌：除非是 ≤8 的单/双/三，一律不吃（只吃对手的牌）；
-//  2. 只有炸弹能大过且桌面无分：≤4×8 的炸弹 30% 出，4×8 以上的 4/5 张炸弹 5% 出，
-//     超过 5 张或王炸不出；
-//  3. 桌面有分：分 ≥50 必压；分 <50 时 4 张炸弹照出、5 张 50%、6 张及以上（含王炸）20%。
+//  2. 无整组常规牌能压时可拆 A/2/大小王的对子跟对手的单牌
+//     （拆一张单跟，另一张留手后续继续跟或组对）；
+//  3. 只有炸弹能大过且桌面无分：4 张 ≤8 两成、4 张大牌面一成、超 4 张（含王炸）半成放行；
+//  4. 桌面有分且 ≤50：4 张八成、5 张四成、6 张及以上（含王炸）一成；分 >50 必压。
 //
 // 非炸弹的常规跟牌不受掷骰限制（能压就用最小的一组）；返回 nil 表示过牌。
+// 概率分档常量集中在 static.go。
 func FollowSmart(ctx FollowCtx) []card.Card {
 	// 规则 1：不吃队友的大牌，只吃对手的牌
 	if ctx.TopIsTeammate && !isSmallTop(ctx.Top) {
@@ -127,6 +129,11 @@ func FollowSmart(ctx FollowCtx) []card.Card {
 	if normal != nil {
 		return normal
 	}
+	// 规则补充：无整组常规牌能压对手的单牌时，允许拆 A/2/大小王的对子
+	// 出一张单跟（另一张留手后续继续跟或组对）
+	if sp := splitHighPair(ctx.Hand, ctx.Top); sp != nil {
+		return sp
+	}
 	if bomb == nil {
 		return nil // 跟不住 → 过牌
 	}
@@ -146,12 +153,44 @@ func FollowSmart(ctx FollowCtx) []card.Card {
 func isSmallTop(top card.Shape) bool {
 	switch top.Kind {
 	case card.KindSingle, card.KindPair, card.KindTriple:
-		return top.Rank <= 8
+		return top.Rank <= smallTopRankMax
 	}
 	return false
 }
 
-// bombChance 只剩炸弹时各炸弹的放行概率。
+// splitHighPair 拆高牌对子跟单：恰 2 张的 A/2/大小王对子在手、
+// 桌面是对手的单牌且没有整组常规牌能压时，从对子拆出一张单跟，
+// 牌面须大过桌面。另一张留手，后续可继续拆单或重新组对。
+// 只拆对子：三条/炸弹（含 3 王王炸）不参与拆分。
+func splitHighPair(hand []card.Card, top card.Shape) []card.Card {
+	if top.Kind != card.KindSingle {
+		return nil
+	}
+	byFace := make(map[card.Face][]card.Card)
+	for _, c := range hand {
+		byFace[c.Face] = append(byFace[c.Face], c)
+	}
+	faces := make([]card.Face, 0, len(byFace))
+	for f := range byFace {
+		faces = append(faces, f)
+	}
+	sort.Slice(faces, func(i, j int) bool { return faces[i] < faces[j] })
+	for _, f := range faces {
+		if f < card.FaceA { // 只拆高牌对子：A/2/小王/大王
+			continue
+		}
+		cs := byFace[f]
+		if len(cs) != 2 {
+			continue
+		}
+		if int(f) > top.Rank {
+			return cs[:1]
+		}
+	}
+	return nil
+}
+
+// bombChance 只剩炸弹时各炸弹的放行概率（分档常量见 static.go）。
 func bombChance(b card.Shape, pot int) float64 {
 	if pot > 50 {
 		return 1 // 分大于 50 必压过对手
@@ -161,20 +200,20 @@ func bombChance(b card.Shape, pot int) float64 {
 		// 桌面没分：≤4×8 两成，4 张大牌面或超 4 张（含王炸）半成
 		switch {
 		case king || b.Len > 4:
-			return 0.05
+			return bombPot0Big
 		case b.Rank <= 8:
-			return 0.20
+			return bombPot0SmallRank
 		default:
-			return 0.10
+			return bombPot0BigRank
 		}
 	}
 	// 桌面有分且 ≤50：4 张八成，5 张四成，6 张及以上（含王炸）一成
 	switch {
 	case king || b.Len >= 6:
-		return 0.10
+		return bombPot50Len6P
 	case b.Len == 5:
-		return 0.40
+		return bombPot50Len5
 	default:
-		return 0.80
+		return bombPot50Len4
 	}
 }

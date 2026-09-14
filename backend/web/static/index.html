@@ -55,10 +55,10 @@
         <div class="modal-panel">
           <div class="modal-icon">🤖</div>
           <div class="modal-title">人机模式</div>
-          <p class="modal-text">当前还有 <b>{{ botConfirm.empty }}</b> 个空位</p>
-          <p class="modal-sub">可填充机器人立即开牌，或继续等待真人入座</p>
+          <p class="modal-text">还有 <b>{{ botConfirm.empty }}</b> 个空位</p>
+          <p class="modal-sub">是否填充机器人立即开局？</p>
           <div class="modal-btns">
-            <button class="btn-gold" @click="confirmBotFill">填充机器人并开牌</button>
+            <button class="btn-gold" @click="confirmBotFill">填充机器人开牌</button>
             <button class="btn-ghost" @click="cancelBotFill">等待真人</button>
           </div>
         </div>
@@ -461,6 +461,8 @@
           desks: [],
           client: '',
           historyPage: 1,//战绩当前页
+          // 对局统计（终局弹窗展示）：出牌手数/圈数/两队炸弹分布与最大炸弹
+          gameStats: { startTime: 0, plays: 0, tricks: 0, bombs: { mine: {}, foe: {} }, maxBomb: null },
 
           cards: [],
 
@@ -703,7 +705,9 @@
           this.client.on('TRUSTEE_CHANGE', function (data) {
             var direct = this.getDirectionByPosId(data.posId);
             this.posState[direct].trustee = !!data.trustee;
-            if (data.posId === this.posId) {
+            // 仅对局进行中提示；终局清托管（GAME_OVER 随后帧）不弹——
+            // layer.msg 是 type:0 对话框，会触发 closeAll("dialog") 顶掉结果弹窗
+            if (data.posId === this.posId && this.roomState.state === 2) {
               layer.msg(data.trustee ? '已开启托管，系统代打中' : '已取消托管，恢复手动操作');
             }
           }.bind(this));
@@ -744,6 +748,7 @@
             // 初始化数据（开局即出牌阶段，state 由随后的 SHOW_TOP_CARD 置 2）
             this.botConfirm.show = false;//开局后关闭人机模式确认弹窗（若仍打开）
             this.initCards(data.cards);
+            this.resetGameStats();
 
             this.posState.p0.isPass = false;
             this.posState.p1.isPass = false;
@@ -828,6 +833,11 @@
               this.posState[tmpDirect].sumFeng = data.sumFeng[i];
             }
             this.roomState.tmpFeng = data.tmpFeng;
+            // 对局统计（终局弹窗展示）：clear=一圈打完；重连重放帧不重复计数
+            if (data.clear) { this.gameStats.tricks++; }
+            if (!data.replay && !data.isPass) {
+              this.trackPlay(data.ctxData.posId, data.ctxData.cards);
+            }
             if (!data.isPass) {
               this.roomState.ctxCard.len = data.ctxData.len;
               this.roomState.ctxCard.key = data.ctxData.key;
@@ -873,10 +883,6 @@
           }.bind(this))
 
           this.client.on('GAME_OVER', function (data) {
-            var iWon = data.winner.indexOf(this.posId) > - 1;
-            var msg = iWon ? '恭喜你，你赢了' : '很遗憾，你输了';
-            var icon = iWon ? 6 : 5;
-
             // 分牌分值：5 计 5 分，10/K 计 10 分（与 internal/card/dict.go 一致）
             var cardScore = function (v) { return v === 5 ? 5 : (v === 10 || v === 13 ? 10 : 0); };
             // 剩余手牌中的分牌总分（未出完者的分按规则记入对方）
@@ -892,60 +898,94 @@
               { key: 'foe', label: '对方', dirs: ['p0', 'p2', 'p4', 'p6'] }
             ];
             teams.forEach(function (t) {
-              t.grab = 0;      // 全队抓分
-              t.leftover = 0;  // 未出完者剩牌分
+              t.leftover = 0;   // 未出完者剩牌中的分牌分
+              t.stuckScore = 0; // 未出完者已抓但未兑现的分（跑完方全出时收走）
               t.allOut = true;
-              t.dirs.forEach(function (d) {
+              t.outScore = 0;  // 已出完成员的得分之和（未出完者记 0 分）
+              t.members = t.dirs.map(function (d) {
                 var p = this.posState[d];
-                t.grab += p.sumFeng;
-                if (p.cards.length > 0) {
+                var out = p.cards.length === 0;
+                var score = out ? p.sumFeng : 0;
+                if (out) {
+                  t.outScore += score;
+                } else {
                   t.allOut = false;
                   t.leftover += leftoverScore(d);
+                  t.stuckScore += p.sumFeng;
                 }
+                return { d: d, name: p.name, out: out, left: p.cards.length, score: score };
               }.bind(this));
             }.bind(this));
-            // 最终总分：全队出完的一方抓走对方未出完者的剩牌分
+            // 最终总分：仅当一方全部跑完、对方未跑完时，跑完方收走对方未跑完玩家
+            // 的剩牌分牌分与已抓未兑现的分；其余情况总分 = 本队出完玩家得分之和
             var mineTeam = teams[0];
             var foeTeam = teams[1];
-            if (mineTeam.allOut && !foeTeam.allOut) {
-              mineTeam.final = mineTeam.grab + foeTeam.leftover;
-              foeTeam.final = foeTeam.grab;
-            } else if (foeTeam.allOut && !mineTeam.allOut) {
-              foeTeam.final = foeTeam.grab + mineTeam.leftover;
-              mineTeam.final = mineTeam.grab;
-            }
-            teams.forEach(function (t) {
-              if (t.final === undefined) t.final = t.grab;
-            });
+            var winnerIsMine = mineTeam.dirs.indexOf(this.getDirectionByPosId(data.winner[0])) > -1;
+            var winT = winnerIsMine ? mineTeam : foeTeam;
+            var loseT = winnerIsMine ? foeTeam : mineTeam;
+            winT.final = (winT.allOut && !loseT.allOut)
+              ? winT.outScore + loseT.leftover + loseT.stuckScore
+              : winT.outScore;
+            loseT.final = loseT.outScore;
 
-            // 本局分差汇总：胜队最终得分即两队差距，顶部一行展示（不再人均分摊到成员行）
-            var gapLine = '本局分差 ' + data.score + ' 分' + (data.ratio && data.ratio !== 1 ? '（×' + data.ratio + '）' : '');
+            // 布局固定：左侧本方、右侧对方；胜负用卡片背景水印与配色表达
+            var winnerDir = this.getDirectionByPosId(data.winner[0]);
+            // MVP：胜队中得分最高的出完玩家（并列都标）
+            var winTeam = teams.filter(function (t) { return t.dirs.indexOf(winnerDir) > -1; })[0];
+            var mvpMax = 0;
+            winTeam.members.forEach(function (m) { if (m.out && m.score > mvpMax) mvpMax = m.score; });
 
-            var content = '<div class="msg-title msg-' + (iWon ? 'success' : 'fail') + '">' + msg + '</div>'
-              + '<div class="over-gap">' + gapLine + '</div>';
+            // ---- 队伍卡片：左右并排（左=本方蓝、右=对方红），成员行三列对齐 ----
+            var content = '<div class="ov"><div class="ov-teams">';
             teams.forEach(function (t) {
-              var isWinnerTeam = t.dirs.indexOf(this.getDirectionByPosId(data.winner[0])) > -1;
-              // 队头：本方/对方 · 胜负 · 抓分（→ 最终分，仅带走对方剩分时才有）
-              content += '<div class="over-team ' + (t.key === 'mine' ? 'over-team-mine' : 'over-team-foe') + (isWinnerTeam ? ' over-team-win' : '') + '">'
-                + '<div class="over-team-head"><span class="over-team-name">' + t.label + (isWinnerTeam ? ' · 胜' : ' · 负') + '</span>'
-                + '<span class="over-head-grab">抓分 ' + t.grab + '</span>'
-                + (t.final !== t.grab ? '<span class="over-final">→ 最终 ' + t.final + '</span>' : '') + '</div>';
-              t.dirs.forEach(function (d) {
-                var p = this.posState[d];
-                // 成员行：名字[+剩牌标签] …… 抓分（等宽数字右对齐）
-                content += '<div class="over-row"><span class="over-name">' + p.name + (d === 'p3' ? '（你）' : '');
-                if (p.cards.length > 0) {
-                  content += '<span class="over-leftover">剩' + p.cards.length + '张·' + leftoverScore(d) + '分</span>';
-                }
-                content += '</span>'
-                  + '<span class="over-grab' + (p.sumFeng > 0 ? ' over-grab-live' : '') + '">' + p.sumFeng + '</span></div>';
-              }.bind(this));
+              var isWinnerTeam = t.dirs.indexOf(winnerDir) > -1;
+              content += '<div class="ov-team ' + (t.key === 'mine' ? 'ov-mine' : 'ov-foe') + ' ' + (isWinnerTeam ? 'ov-win' : 'ov-lose') + '">'
+                + '<em class="ov-mark">' + (isWinnerTeam ? '胜' : '负') + '</em>'
+                + '<div class="ov-head"><span class="ov-team-name">' + t.label + '</span>'
+                + '<span class="ov-total">' + t.final + '</span></div>'
+                + '<div class="ov-cols"><span>玩家</span><span>剩牌</span><span>得分</span></div>';
+              t.members.forEach(function (m) {
+                content += '<div class="ov-row' + (m.d === 'p3' ? ' ov-me' : '') + '">'
+                  + '<span class="ov-p">' + m.name
+                  + (isWinnerTeam && m.out && m.score > 0 && m.score === mvpMax ? '<em class="ov-mvp">MVP</em>' : '')
+                  + '</span>'
+                  + '<span class="ov-c' + (m.left > 0 ? ' ov-c-live' : '') + '">' + m.left + '</span>'
+                  + '<span class="ov-s' + (m.score > 0 ? ' ov-s-live' : '') + '">' + m.score + '</span>'
+                  + '</div>';
+              });
               content += '</div>';
             }.bind(this));
+            content += '</div>';
+
+            // ---- 对局统计：时长 / 轮数 / 出牌手数 / 最大炸弹 / 两队炸弹分布 ----
+            var st = this.gameStats;
+            // 本局时长：时:分:秒（开局时刻缺失则显示 —）
+            var dur = '—';
+            if (st.startTime) {
+              var sec = Math.max(0, Math.floor((Date.now() - st.startTime) / 1000));
+              var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+              dur = pad(Math.floor(sec / 3600)) + ':' + pad(Math.floor(sec % 3600 / 60)) + ':' + pad(sec % 60);
+            }
+            var bombCats = [['b4', '4×炸'], ['b5', '5×炸'], ['b6', '6×炸'], ['b7', '7×+'], ['king', '王炸']];
+            content += '<div class="ov-stats">'
+              + '<div class="ov-kv"><span>用时</span><b>' + dur + '</b></div>'
+              + '<div class="ov-kv"><span>轮数</span><b>' + st.tricks + '</b></div>'
+              + '<div class="ov-kv"><span>手数</span><b>' + st.plays + '</b></div>'
+              + '<div class="ov-kv"><span>最大炸弹</span><b>' + (st.maxBomb ? this.bombText(st.maxBomb) : '—') + '</b></div>'
+              + '</div>'
+              + '<div class="ov-bombs">'
+              + '<div class="ov-brow ov-bhead"><span></span>' + bombCats.map(function (c) { return '<span>' + c[1] + '</span>'; }).join('') + '</div>';
+            ['mine', 'foe'].forEach(function (key) {
+              content += '<div class="ov-brow"><span class="ov-bname">' + (key === 'mine' ? '本方' : '对方') + '</span>'
+                + bombCats.map(function (c) { return '<b>' + (st.bombs[key][c[0]] || 0) + '</b>'; }).join('')
+                + '</div>';
+            }.bind(this));
+            content += '</div></div>';
 
             layer.open({
-              icon: icon,
               title: '本局结果',
+              skin: 'ov-layer',
+              area: ['620px', 'auto'],
               content: content,
               // 关闭弹窗后清除桌面：出牌区域的剩牌/最后一手展示全部清空
               end: function () {
@@ -1075,6 +1115,37 @@
         }.bind(this));
       },
       methods: {
+        // ---- 对局统计（终局弹窗展示）----
+        // 开局重置；断线重连期间漏掉的出牌不计，属可接受的展示误差
+        resetGameStats: function () {
+          var empty = function () { return { b4: 0, b5: 0, b6: 0, b7: 0, king: 0 }; };
+          // startTime 记录开局时刻，终局弹窗展示本局时长
+          this.gameStats = { startTime: Date.now(), plays: 0, tricks: 0, bombs: { mine: empty(), foe: empty() }, maxBomb: null };
+        },
+        // 记录一手出牌：手数、炸弹归属与全场最大炸弹
+        trackPlay: function (posId, cards) {
+          var s = this.gameStats;
+          s.plays++;
+          var side = (posId % 2 === 1) ? 'mine' : 'foe';
+          var vals = cards.map(function (c) { return c.value; });
+          var n = vals.length;
+          var isKing = n >= 3 && vals.every(function (v) { return v >= 16; });
+          var isBomb = isKing || (n >= 4 && vals.every(function (v) { return v === vals[0]; }));
+          if (isBomb) {
+            s.bombs[side][isKing ? 'king' : (n >= 7 ? 'b7' : 'b' + n)]++;
+            // 最大炸弹：先比张数再比牌面（王炸同张数压普通炸，多王压少王）
+            var rank = isKing ? 100 + n : vals[0];
+            if (!s.maxBomb || n > s.maxBomb.n || (n === s.maxBomb.n && rank > s.maxBomb.rank)) {
+              s.maxBomb = { n: n, rank: rank, king: isKing };
+            }
+          }
+        },
+        // 炸弹文案：王炸 → "N×王"，普通 → "N×A"
+        bombText: function (b) {
+          if (b.king) { return b.n + '×王'; }
+          var face = { 11: 'J', 12: 'Q', 13: 'K', 14: 'A', 15: '2' }[b.rank] || b.rank;
+          return b.n + '×' + face;
+        },
         validateLogin: function () {
           if (!this.posState.p3.name) {
             layer.msg('请输入用户名');

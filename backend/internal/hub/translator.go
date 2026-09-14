@@ -44,14 +44,14 @@ func zeroPosMap() map[string]int {
 }
 
 // leadFrame 开局首出引导帧/首出前掉线的补发轮转帧：
-// 无压牌（key/type 为空串）、轮转到首出者
+// 无压牌（key/type 为空串）、轮转到首出者；首出倒计时单独放宽
 func leadFrame(p int) ctxPlayChange {
 	return ctxPlayChange{
 		CtxData: ctxPlayCtx{Len: 0, Key: "", Type: "", Cards: []card.Card{}, PosID: p},
 		SumFeng: zeroPosMap(),
 		TmpFeng: 0,
 		PosID:   p,
-		Timeout: playTiming,
+		Timeout: firstPlayTiming,
 		Clear:   true, // 领出状态：桌面无牌可压，客户端应清空出牌区与"要压的牌型"
 	}
 }

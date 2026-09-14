@@ -730,6 +730,10 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   background-image: url('../images/qq.png');
   background-repeat: no-repeat;
   background-position: center;
+  /* 统一头像渲染高度：qq.png(60×43) 与 qq-king.png(60×56) 原始高度不同，
+     居中渲染会让国王皮肤整体下移、序号徽标(bottom:12.5%)相对头像错位；
+     统一按 43px 高渲染，两类头像底边/徽标对齐完全一致 */
+  background-size: auto 43px;
 }
 .player-photo-king { background-image: url('../images/qq-king.png') !important; }
 
@@ -767,84 +771,151 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   color: var(--gold);
 }
 
-/* ---------------- 弹层内文本 ---------------- */
-.msg-title { font-size: 20px; margin-bottom: 5px; }
-.msg-success { color: #29ba9d; }
-.msg-fail { color: #c80000; }
+/* ---------------- 终局结算弹窗（重构版） ---------------- */
+/* 弹窗整体：去掉默认内边距，由 .ov 自行控制留白 */
+.ov-layer .layui-layer-content { padding: 0; overflow: visible; }
+.ov { padding: 14px 18px 16px; font-variant-numeric: tabular-nums; }
 
-/* 终局弹窗：按队分块展示抓分 / 最终总分（队伍头与成员行均为 flex 三段对齐） */
-.over-team {
-  margin-top: 10px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.06);
+/* 两队卡片左右并排，等宽对比 */
+.ov-teams { display: flex; gap: 14px; }
+.ov-team {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+  padding: 10px 12px 8px;
   text-align: left;
 }
-.over-team-mine { border-left: 3px solid #2fae6e; }
-.over-team-foe { border-left: 3px solid #e2703a; }
-.over-team-win {
-  background: rgba(240, 192, 90, 0.12);
-  box-shadow: inset 0 0 0 1px rgba(240, 192, 90, 0.4);
+/* 胜负水印：大字居中铺在卡片背景，替代原先的小徽标 */
+.ov-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  text-align: center;
+  font-size: 88px;
+  font-weight: 800;
+  font-style: normal;
+  line-height: 1;
+  pointer-events: none;
+  color: var(--tc);
+  opacity: 0.22;
 }
-/* 队伍头：本方/对方 · 抓分 · 最终分（右端对齐） */
-.over-team-head {
+.ov-lose .ov-mark { color: #8a94a0; opacity: 0.20; }
+/* 队伍主色：本方蓝 / 对方红；灰为中性（列头、负方弱化） */
+.ov-mine { --tc: #2b6cb0; --tc-weak: rgba(43, 108, 176, 0.12); --tc-line: rgba(43, 108, 176, 0.4); }
+.ov-foe  { --tc: #c0392b; --tc-weak: rgba(192, 57, 43, 0.10); --tc-line: rgba(192, 57, 43, 0.4); }
+
+/* 胜方：队伍色浅底 + 描边；负方：冷灰弱化 */
+.ov-win {
+  background: linear-gradient(180deg, var(--tc-weak), rgba(0, 0, 0, 0.02));
+  border: 1px solid var(--tc-line);
+  box-shadow: 0 2px 8px var(--tc-weak);
+}
+.ov-lose {
+  background: #f5f6f8;
+  border: 1px solid #e2e6eb;
+}
+
+/* 队头：队名 + 胜负徽标 居左，总分大号居右 */
+.ov-head {
   display: flex;
   align-items: baseline;
-  font-weight: 700;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
   margin-bottom: 4px;
 }
-.over-head-grab {
-  margin-left: 12px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #666;
-}
-.over-final {
+.ov-team-name { font-size: 15px; font-weight: 800; color: #333; letter-spacing: 1px; }
+/* 总分：弹窗内最大号数字，胜方用队伍色、负方灰色弱化 */
+.ov-total {
   margin-left: auto;
-  color: #b8860b;
+  font-size: 28px;
   font-weight: 800;
+  line-height: 1;
+  color: #9aa3ad;
 }
-.over-team-win .over-final { color: #d4a017; }
-/* 成员行：抓分一列等宽数字右对齐，tabular-nums 保证纵向对齐工整 */
-.over-row {
-  display: flex;
+.ov-win .ov-total { color: var(--tc); }
+
+/* 成员三列：玩家 | 剩牌 | 得分（数字列右对齐、定宽对齐） */
+.ov-cols, .ov-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 46px 50px;
   align-items: center;
-  line-height: 24px;
+  line-height: 26px;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
-.over-name {
-  flex: 1 1 auto;
+.ov-cols {
+  line-height: 20px;
+  font-size: 11px;
+  color: #999;
+}
+.ov-cols span:nth-child(2), .ov-row .ov-c { text-align: right; padding-right: 12px; }
+.ov-cols span:nth-child(3), .ov-row .ov-s { text-align: right; padding-right: 4px; }
+.ov-p {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.over-grab {
-  flex: 0 0 56px;
-  text-align: right;
-  padding-right: 10px;
   font-size: 13px;
-  font-weight: 700;
-  color: #666;
+  color: #444;
 }
-.over-grab-live { color: #8a6508; }
-/* 未出完者：剩牌张数与送出分（跟在名字后的小标签） */
-.over-leftover {
-  margin-left: 6px;
+.ov-c { font-size: 13px; color: #aab2bb; }
+.ov-c-live { color: #c0392b; font-weight: 700; }
+.ov-s { font-size: 14px; font-weight: 700; color: #99a1ab; }
+.ov-win .ov-s-live { color: var(--tc); }
+
+/* MVP 徽标：胜队得分最高者（红色渐变） */
+.ov-mvp {
+  margin-left: 5px;
   padding: 0 5px;
-  border-radius: 6px;
-  font-size: 11px;
-  background: rgba(192, 57, 43, 0.1);
-  color: #c0392b;
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #d64541, #c0392b);
+  letter-spacing: 0.5px;
 }
-/* 标题下的本局分差汇总行（胜队最终得分，替代原人均 ± 分摊列） */
-.over-gap {
-  margin: 2px 0 4px;
-  font-size: 13px;
-  font-weight: 700;
-  color: #666;
-  font-variant-numeric: tabular-nums;
+/* "你"所在行高亮：本方蓝浅底 */
+.ov-me { background: rgba(43, 108, 176, 0.12); border-radius: 6px; font-weight: 700; }
+
+/* 统计条：轮数 / 手数 / 最大炸弹 */
+.ov-stats {
+  display: flex;
+  margin-top: 14px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
+.ov-kv { flex: 1; text-align: center; }
+.ov-kv + .ov-kv { border-left: 1px solid rgba(0, 0, 0, 0.08); }
+.ov-kv span { display: block; font-size: 11px; color: #999; }
+.ov-kv b { font-size: 17px; font-weight: 800; color: #555; }
+
+/* 两队炸弹分布：本方蓝 / 对方红，网格严格对齐，行距宽松 */
+.ov-bombs {
+  margin-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 8px 4px 2px;
+}
+.ov-brow {
+  display: grid;
+  grid-template-columns: 48px repeat(5, 1fr);
+  align-items: center;
+  line-height: 30px;
+}
+/* 表头弱化：小号灰色；数字强化：大号加粗黑色，拉开对比 */
+.ov-bhead { line-height: 24px; font-size: 12px; color: #98a1aa; letter-spacing: 1px; }
+.ov-bhead span, .ov-brow b { text-align: center; }
+.ov-bname {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-align: center !important;
+}
+.ov-brow .ov-bname { color: #2b6cb0; }
+.ov-bombs .ov-brow:last-child .ov-bname { color: #c0392b; }
+.ov-brow b { font-size: 16px; font-weight: 700; color: #333; }
 
 .msg-box {
   position: fixed;
@@ -1136,20 +1207,20 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 50;
-  padding: 4px 14px;
-  border-radius: 12px;
-  background: rgba(240, 140, 30, 0.85);
+  padding: 1px 8px;
+  border-radius: 9px;
+  background: rgba(240, 140, 30, 0.55);
   color: #fff;
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 700;
-  line-height: 20px;
+  line-height: 16px;
   text-shadow: none;
   pointer-events: none;
   animation: trustee-breathe 1.2s ease-in-out infinite;
-  box-shadow: 0 0 8px rgba(240, 140, 30, 0.6);
+  box-shadow: 0 0 6px rgba(240, 140, 30, 0.35);
 }
 
 @keyframes trustee-breathe {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.85; }
 }

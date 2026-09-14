@@ -5,7 +5,7 @@ package table
 
 import (
 	"sort"
-	"strconv"
+	"sync/atomic"
 	"time"
 
 	"talkcards/backend/internal/card"
@@ -65,7 +65,7 @@ type Desk struct {
 	// 上一手是过牌时，重连者只靠 LastPlay 看不到桌面上还有哪手牌要压，
 	// 故重连时先补发本帧再补发 LastPlay。
 	LastValidPlay *PlaySnapshot `json:"-"`
-	Holds     []Hold            `json:"-"` // 断线保留记录（按用户名）
+	Holds         []Hold        `json:"-"` // 断线保留记录（按用户名）
 
 	HostPosID int `json:"-"` // 主持人座位号（第一个入座者）；主持人离桌时自动顺延给下一个有人的座位
 }
@@ -189,14 +189,43 @@ func (d *Desk) EmptySeats() []int {
 	return empty
 }
 
+// botNameSeq 机器人名自增序号（进程内全局单调递增，跨桌不重复）
+var botNameSeq atomic.Uint64
+
+// botName62 62 进制字符表：0-9a-zA-Z
+const botName62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+// botName 生成机器人名："机" + 自增序号的 62 进制表示（0-9a-zA-Z），
+// 不足 3 位左侧补零占位（如 机001、机01a），超出 3 位自然增长。
+// 同一进程内每填一个机器人序号加一，保证多桌并发填充也不重名。
+func botName() string {
+	n := botNameSeq.Add(1)
+	var buf [12]byte
+	i := len(buf)
+	for {
+		i--
+		buf[i] = botName62[n%62]
+		n /= 62
+		if n == 0 {
+			break
+		}
+	}
+	// 不足 3 位补零占位（62 进制无前导零语义，直接补 '0'）
+	for len(buf)-i < 3 {
+		i--
+		buf[i] = '0'
+	}
+	return "机" + string(buf[i:])
+}
+
 // FillBots 把全部空位填充为机器人（视为已准备），返回填充的座位号列表（升序）。
-// 机器人名字按填充顺序编号，仅对局期间存在，终局由 ClearBots 清理。
+// 机器人名字按填充顺序自增编号，仅对局期间存在，终局由 ClearBots 清理。
 func (d *Desk) FillBots() []int {
 	var filled []int
 	for i := range d.Positions {
 		if d.Positions[i].State == 0 {
 			d.Positions[i].State = 2
-			d.Positions[i].UserName = "机器人#" + strconv.Itoa(d.DeskID) + "-" + strconv.Itoa(d.Positions[i].PosID)
+			d.Positions[i].UserName = botName()
 			d.Positions[i].IsBot = true
 			filled = append(filled, d.Positions[i].PosID)
 		}

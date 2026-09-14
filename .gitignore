@@ -22,3 +22,5 @@ go.work.sum
 .idea/
 .vscode/
 *.swp
+
+.gocache

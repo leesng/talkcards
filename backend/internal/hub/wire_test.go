@@ -192,10 +192,10 @@ func TestWireGoldenFrames(t *testing.T) {
 	if want := (showTopCard{TopCards: []card.Card{}, DizhuPosID: P, Timeout: playTiming}); !reflect.DeepEqual(stc, want) {
 		t.Fatalf("SHOW_TOP_CARD = %+v, 期望 %+v", stc, want)
 	}
-	// 首出引导帧黄金
+	// 首出引导帧黄金（首轮首出倒计时放宽为 firstPlayTiming）
 	expectFrame(t, conns[0], EvCtxPlayChange, 1, ctxPlayChange{
 		CtxData: ctxPlayCtx{Len: 0, Key: "", Type: "", Cards: []card.Card{}, PosID: P},
-		SumFeng: zeroPosMap(), PosID: P, Timeout: playTiming,
+		SumFeng: zeroPosMap(), PosID: P, Timeout: firstPlayTiming,
 		Clear: true, // 引导帧=领出状态：桌面无牌可压，客户端应清桌
 	})
 
