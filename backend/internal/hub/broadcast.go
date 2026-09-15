@@ -63,6 +63,31 @@ func (h *Hub) broadCastRoom(event string, deskID int, v interface{}, exclude wss
 	})
 }
 
+// broadCastGameStart: seated players get the full hands (bug-for-bug); desk
+// spectators get the redacted payload — sizes only, no card faces.
+func (h *Hub) broadCastGameStart(deskID int, full gameStartPayload) {
+	fullBytes, err := json.Marshal(full)
+	if err != nil {
+		h.logger.Error("序列化载荷失败", "event", EvGameStart, "err", err)
+		return
+	}
+	redactedBytes, err := json.Marshal(redactGameStart(full))
+	if err != nil {
+		h.logger.Error("序列化载荷失败", "event", EvGameStart, "err", err)
+		return
+	}
+	h.sessions.each(func(c *Session) {
+		if c.deskID != deskID {
+			return
+		}
+		if c.posID == -1 {
+			h.postRaw(c, EvGameStart, redactedBytes)
+		} else {
+			h.postRaw(c, EvGameStart, fullBytes)
+		}
+	})
+}
+
 func (h *Hub) nextID() int64 {
 	h.msgSeq++
 	return h.msgSeq

@@ -22,6 +22,15 @@ func newGameStart(g *game.Game) gameStartPayload {
 	return gameStartPayload{Cards: groups}
 }
 
+// redactGameStart: spectator view — hand sizes only, never the faces.
+func redactGameStart(p gameStartPayload) gameStartPayload {
+	out := gameStartPayload{Cards: make([]handGroup, len(p.Cards))}
+	for i, g := range p.Cards {
+		out.Cards[i] = handGroup{ID: g.ID, Cards: []card.Card{}, Count: len(g.Cards)}
+	}
+	return out
+}
+
 func newGameOver(res game.Result) gameOverPayload {
 	return gameOverPayload{Winner: res.Winner, Loser: res.Loser, Score: res.Score, Ratio: res.Ratio}
 }

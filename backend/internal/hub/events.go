@@ -21,6 +21,7 @@ const (
 	EvHistoryList   = "HISTORY_LIST"
 	EvHistoryDetail = "HISTORY_DETAIL"
 	EvToggleTrustee = "TOGGLE_TRUSTEE" // in-game only
+	EvSpectate      = "SPECTATE"       // watch an in-progress game (no hands)
 )
 
 // Outbound events.
@@ -53,6 +54,8 @@ const (
 	EvUserMessageOut       = "USER_MESSAGE"
 	EvHostChange           = "HOST_CHANGE"    // first sit / host leaves / desk emptied
 	EvTrusteeChange        = "TRUSTEE_CHANGE" // manual toggle / timeout auto / reconnect cancel
+	EvSpectateSuccess      = "SPECTATE_SUCCESS"
+	EvSpectateError        = "SPECTATE_ERROR"
 )
 
 type sitdownReq struct {
@@ -66,6 +69,12 @@ type historyListReq struct { // page starts at 1; 0 treated as 1
 
 type historyDetailReq struct {
 	GameID int64 `json:"gameId"`
+}
+
+type spectateSuccess struct { // spectator watches whole-table, no own seat
+	DeskID    int          `json:"deskId"`
+	PosInfo   []table.Seat `json:"posInfos"`
+	HostPosID int          `json:"hostPosId"` // -1 = no host
 }
 
 type reconnectPayload struct { // fields compatible with SITDOWN_SUCCESS
@@ -135,9 +144,13 @@ type hostChange struct { // posId=-1: desk has no host
 
 type houseStatusChange struct { // userName always present ("" on leave)
 	DeskID   int    `json:"deskId"`
-	PosID    int    `json:"posId"`
+	PosID    int    `json:"posId"` // -1 = desk-level update only (deskState)
 	State    int    `json:"state"`
 	UserName string `json:"userName"`
+	// DeskState: lobby-visible desk state (2 = game in progress); lets lobby
+	// clients offer spectating. Nil on plain seat updates. Pointer so the
+	// end-of-game 0 survives JSON (no omitempty drop).
+	DeskState *int `json:"deskState,omitempty"`
 }
 
 type posStatusChange struct { // isBot marks bot seats (frontend bot badge)
@@ -173,6 +186,9 @@ type handGroup struct { // HT: hearts tally incl. jokers (type=0), frontend disp
 	ID    int         `json:"id"`
 	Cards []card.Card `json:"cards"`
 	HT    [15]int     `json:"ht"`
+	// Count: hand size only (spectator redaction — no card faces); omitted
+	// on the full payload.
+	Count int `json:"count,omitempty"`
 }
 
 type gameStartPayload struct {

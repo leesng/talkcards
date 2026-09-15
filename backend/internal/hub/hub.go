@@ -91,6 +91,7 @@ func (h *Hub) Register(srv *wssrv.Server) {
 	noData(srv, EvCancelPrepare, h.onCancelPrepare)
 	on(srv, EvHostStartGame, h.logger, h.onHostStartGame) // payload may be omitted (fillBots)
 	noData(srv, EvToggleTrustee, h.onToggleTrustee)
+	on(srv, EvSpectate, h.logger, h.onSpectate) // watch an in-progress game
 	srv.OnDisconnect(h.onDisconnect)
 }
 
@@ -118,6 +119,52 @@ func (h *Hub) clientInRoom(conn wssrv.Conn) (*Session, *table.Desk) {
 		return nil, nil
 	}
 	return c, h.lobby.Desk(c.deskID)
+}
+
+// seatedClient: like clientInRoom but nil for spectators (deskID set, posID
+// -1) — spectator input must never touch game/seat state.
+func (h *Hub) seatedClient(conn wssrv.Conn) (*Session, *table.Desk) {
+	c, d := h.clientInRoom(conn)
+	if c == nil || c.posID == -1 {
+		return nil, nil
+	}
+	return c, d
+}
+
+// onSpectate: watch an in-progress game (entered from the lobby by clicking
+// any seat of a playing desk). Spectators receive every room frame except
+// hand faces — GAME_START is redacted to hand sizes only.
+func (h *Hub) onSpectate(s wssrv.Conn, data sitdownReq) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	c := h.sessions.find(s)
+	if c == nil {
+		return
+	}
+	if c.deskID != -1 && c.posID != -1 {
+		// 入座（含对局中）玩家一律不能观战：对局中座位不可释放转观战
+		h.emit(c, EvMessage, msgPayload{Msg: "入座中不能观战，请先退出房间"})
+		return
+	}
+	d := h.lobby.Desk(data.DeskID)
+	if d == nil || !d.GameInProgress() {
+		h.emit(c, EvSpectateError, loginFailPayload{Msg: "该桌没有进行中的对局"})
+		return
+	}
+	// Switching desks while already spectating: leave the old one quietly.
+	if c.deskID != -1 && c.deskID != d.DeskID {
+		h.broadcastSpectatorLeave(c.UserName(), c.deskID)
+	}
+	c.deskID, c.posID = d.DeskID, -1
+	h.emit(c, EvSpectateSuccess, spectateSuccess{DeskID: d.DeskID, PosInfo: d.Positions, HostPosID: d.HostPosID})
+	h.replayGameFrames(c, d, true)
+	h.broadCastRoom(EvUserMessageOut, d.DeskID, userMessage{Type: "SYS", PosID: -1, Msg: "玩家[" + c.UserName() + "]进入观战", ID: h.nextID(), Time: now()}, c.conn)
+	h.logger.Info("玩家进入观战", "user", c.UserName(), "desk", d.DeskID)
+}
+
+func (h *Hub) broadcastSpectatorLeave(name string, deskID int) {
+	h.broadCastRoom(EvUserMessageOut, deskID, userMessage{Type: "SYS", PosID: -1, Msg: "玩家[" + name + "]退出观战", ID: h.nextID(), Time: now()}, nil)
 }
 
 func (h *Hub) onLogin(s wssrv.Conn, name string) {
@@ -242,6 +289,10 @@ func (h *Hub) onSitdown(s wssrv.Conn, data sitdownReq) {
 	if c == nil {
 		return
 	}
+	if c.deskID != -1 && c.posID == -1 {
+		h.emit(c, EvMessage, msgPayload{Msg: "观战中，请先退出观战再入座"})
+		return
+	}
 	d := h.lobby.Desk(data.DeskID)
 	if d == nil || !d.IsEmpty(data.PosID) {
 		h.emit(c, EvSitdownError, loginFailPayload{Msg: "该位置已有人"})
@@ -274,6 +325,14 @@ func (h *Hub) onUnsitdown(s wssrv.Conn) {
 	if c == nil {
 		return
 	}
+	if c.posID == -1 { // spectator stops watching: no seat to release
+		deskID, userName := c.deskID, c.UserName()
+		c.deskID, c.posID = -1, -1
+		h.emit(c, EvUnsitSuccess, h.lobby.Desks)
+		h.broadcastSpectatorLeave(userName, deskID)
+		h.logger.Info("玩家退出观战", "user", userName, "desk", deskID)
+		return
+	}
 	deskID, posID, userName := c.deskID, c.posID, c.UserName()
 	h.exitRoom(c)
 	h.emit(c, EvUnsitSuccess, h.lobby.Desks)
@@ -285,7 +344,7 @@ func (h *Hub) onPrepare(s wssrv.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	c, d := h.clientInRoom(s)
+	c, d := h.seatedClient(s)
 	if c == nil || d == nil {
 		return
 	}
@@ -312,7 +371,7 @@ func (h *Hub) onHostStartGame(s wssrv.Conn, data hostStartGameReq) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	c, d := h.clientInRoom(s)
+	c, d := h.seatedClient(s)
 	if c == nil || d == nil {
 		return
 	}
@@ -350,7 +409,7 @@ func (h *Hub) onToggleTrustee(s wssrv.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	c, d := h.clientInRoom(s)
+	c, d := h.seatedClient(s)
 	if c == nil || d == nil {
 		return
 	}
@@ -402,7 +461,7 @@ func (h *Hub) onCancelPrepare(s wssrv.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	c, d := h.clientInRoom(s)
+	c, d := h.seatedClient(s)
 	if c == nil || d == nil {
 		return
 	}
@@ -421,7 +480,7 @@ func (h *Hub) onUserMessage(s wssrv.Conn, msg string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	c, _ := h.clientInRoom(s)
+	c, _ := h.seatedClient(s)
 	if c == nil {
 		return
 	}
@@ -439,6 +498,13 @@ func (h *Hub) onDisconnect(s wssrv.Conn) {
 	userName := c.UserName()
 	deskID, posID := c.deskID, c.posID
 	d := h.lobby.Desk(deskID)
+	if deskID != -1 && posID == -1 {
+		// Spectator disconnect: no seat, no hold, never terminates the game.
+		h.sessions.remove(s)
+		h.broadcastSpectatorLeave(userName, deskID)
+		h.logger.Info("观战者断开连接", "user", userName, "desk", deskID)
+		return
+	}
 	if deskID != -1 && d != nil && d.GameInProgress() {
 		// Mid-game disconnect: hold seat+game for reconnect; host rights unchanged.
 		h.sessions.remove(s)

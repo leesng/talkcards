@@ -17,7 +17,7 @@ func (h *Hub) onPlayCard(s wssrv.Conn, data []card.Card) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	c, d := h.clientInRoom(s)
+	c, d := h.seatedClient(s)
 	if c == nil || d == nil || d.Game == nil {
 		return
 	}
@@ -66,6 +66,7 @@ func (h *Hub) applyPlayResult(d *table.Desk, posID int, origin *Session, cards [
 			}
 			h.clearTrustees(d)
 			h.clearBotSeats(d)
+			h.endDeskPlaying(d)
 			d.ResetGame()
 			h.clearDeskPending(d)
 			return
@@ -202,32 +203,40 @@ func (h *Hub) resumeClient(c *Session, d *table.Desk) {
 	h.broadCastRoom(EvUserMessageOut, d.DeskID, userMessage{Type: "SYS", PosID: hold.PosID, Msg: "玩家[" + name + "]重新连接", ID: h.nextID(), Time: now()}, c.conn)
 	h.logger.Info("玩家重连回到座位", "user", name, "desk", d.DeskID, "pos", hold.PosID)
 
+	h.replayGameFrames(c, d, false)
+}
+
+// replayGameFrames: rebuild the live-game view for a (re)joining client —
+// GAME_START + SHOW_TOP_CARD + the current table/turn frame. Redacted drops
+// hand faces for spectators (sizes only). No-op outside the playing phase.
+func (h *Hub) replayGameFrames(c *Session, d *table.Desk, redacted bool) {
 	g := d.Game
-	if g == nil {
+	if g == nil || g.Phase() != game.PhasePlaying {
 		return
 	}
-	switch g.Phase() {
-	case game.PhasePlaying:
-		h.emit(c, EvGameStart, newGameStart(g))
-		h.emit(c, EvShowTopCard, showTopCard{TopCards: g.TopCards(), DizhuPosID: g.DizhuPosID(), Timeout: playTiming})
-		if d.LastPlay != nil {
-			// After a pass, the standing valid play is still on the table —
-			// send it first so the reconnecter knows what to beat, but only
-			// while the table still has a beatable play.
-			_, hasTop := g.TrickTop()
-			if d.LastPlay.IsPass && d.LastValidPlay != nil && hasTop {
-				h.emit(c, EvCtxPlayChange, replayFrame(d.LastValidPlay))
-			}
-			last := replayFrame(d.LastPlay)
-			if !hasTop {
-				last.Clear = true // leading state: clear stale previous-trick display
-			}
-			h.emit(c, EvCtxPlayChange, last)
-		} else {
-			// Disconnected before the first lead: no cached frame — send a
-			// turn frame or the game deadlocks waiting on the reconnecter.
-			h.emit(c, EvCtxPlayChange, leadFrame(g.Turn()))
+	start := newGameStart(g)
+	if redacted {
+		start = redactGameStart(start)
+	}
+	h.emit(c, EvGameStart, start)
+	h.emit(c, EvShowTopCard, showTopCard{TopCards: g.TopCards(), DizhuPosID: g.DizhuPosID(), Timeout: playTiming})
+	if d.LastPlay != nil {
+		// After a pass, the standing valid play is still on the table —
+		// send it first so the reconnecter knows what to beat, but only
+		// while the table still has a beatable play.
+		_, hasTop := g.TrickTop()
+		if d.LastPlay.IsPass && d.LastValidPlay != nil && hasTop {
+			h.emit(c, EvCtxPlayChange, replayFrame(d.LastValidPlay))
 		}
+		last := replayFrame(d.LastPlay)
+		if !hasTop {
+			last.Clear = true // leading state: clear stale previous-trick display
+		}
+		h.emit(c, EvCtxPlayChange, last)
+	} else {
+		// Disconnected before the first lead: no cached frame — send a
+		// turn frame or the game deadlocks waiting on the reconnecter.
+		h.emit(c, EvCtxPlayChange, leadFrame(g.Turn()))
 	}
 }
 
@@ -279,6 +288,14 @@ func (h *Hub) onReconnectTimeout(userName string) {
 	h.terminateGame(d, posID, userName)
 }
 
+// endDeskPlaying: mark the desk idle again in the lobby (deskState=0) once
+// its game ended; spectators and lobby clients stop seeing it as playable.
+func (h *Hub) endDeskPlaying(d *table.Desk) {
+	d.SetState(0)
+	zero := 0
+	h.broadCastHouse(EvStatusChange, houseStatusChange{DeskID: d.DeskID, PosID: -1, DeskState: &zero})
+}
+
 // terminateGame: end the game on an escape; broadcast, reset, persist.
 func (h *Hub) terminateGame(d *table.Desk, escapePos int, escapee string) {
 	h.recordGame(d, "escape")
@@ -293,6 +310,7 @@ func (h *Hub) terminateGame(d *table.Desk, escapePos int, escapee string) {
 	h.clearDeskPending(d)
 	h.clearBotSeats(d)
 	h.clearTrustees(d)
+	h.endDeskPlaying(d)
 	h.logger.Warn("对局因玩家逃跑终止", "desk", d.DeskID, "user", escapee)
 }
 
@@ -359,7 +377,10 @@ func (h *Hub) startGame(deskID int) {
 	d.StartedAt = time.Now()
 	d.LastPlay = nil
 	d.Players = d.PlayerSnapshot()
-	h.broadCastRoom(EvGameStart, deskID, newGameStart(g), nil)
+	d.SetState(2)
+	h.broadCastGameStart(deskID, newGameStart(g))
+	two := 2 // lobby: desk now has a live game (seat clicks spectate)
+	h.broadCastHouse(EvStatusChange, houseStatusChange{DeskID: deskID, PosID: -1, DeskState: &two})
 	// No bidding phase: straight to the first leader + turn frame.
 	dizhu := g.DizhuPosID()
 	h.broadCastRoom(EvShowTopCard, deskID, showTopCard{TopCards: g.TopCards(), DizhuPosID: dizhu, Timeout: playTiming}, nil)

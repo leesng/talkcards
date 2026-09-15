@@ -1,7 +1,7 @@
 package table
 
 import (
-	"strings"
+	"strconv"
 	"testing"
 	"time"
 
@@ -86,21 +86,11 @@ func TestFillBotsAndClearBots(t *testing.T) {
 		if !s.IsBot || s.State != 2 || s.UserName == "" {
 			t.Fatalf("座位 %d 应为已准备机器人", p)
 		}
-		// name format: "机" + base-62 counter (0-9a-zA-Z), zero-padded to 3+ chars
-		if !strings.HasPrefix(s.UserName, "机") {
-			t.Fatalf("机器人名应以「机」开头，实际 %q", s.UserName)
-		}
-		suffix := strings.TrimPrefix(s.UserName, "机")
-		if len(suffix) < 3 {
-			t.Fatalf("机器人名后缀应至少 3 位（补零占位），实际 %q", s.UserName)
-		}
-		if suffix == "" {
-			t.Fatalf("机器人名后缀不应为空")
-		}
-		for _, r := range suffix {
-			if !strings.ContainsRune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", r) {
-				t.Fatalf("机器人名后缀含非法字符 %q", r)
-			}
+		// 名字格式："机" + 2 位桌号 62 进制 + 1 位座位号（1-8）
+		// 1 号桌座位 p → "机0" + "1"(桌号 1 的 62 进制) + itoa(p+1)
+		want := "机01" + strconv.Itoa(p+1)
+		if s.UserName != want {
+			t.Fatalf("座位 %d 机器人名应为 %q，实际 %q", p, want, s.UserName)
 		}
 	}
 	// names are unique within one fill

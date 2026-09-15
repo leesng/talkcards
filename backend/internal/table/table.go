@@ -7,7 +7,7 @@ package table
 
 import (
 	"sort"
-	"sync/atomic"
+	"strconv"
 	"time"
 
 	"talkcards/backend/internal/card"
@@ -193,34 +193,31 @@ func (d *Desk) EmptySeats() []int {
 	return empty
 }
 
-// botNameSeq is a process-global monotonically increasing counter for bot
-// names (unique across desks).
-var botNameSeq atomic.Uint64
-
-// botName62 is the base-62 alphabet 0-9a-zA-Z.
+// botName62 62 进制字符表：0-9a-zA-Z
 const botName62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-// botName generates "机" + base-62 of an auto-increment counter, left-padded
-// to at least 3 characters (机001, 机01a, ...). Each fill increments the
-// counter so concurrent multi-desk fills never collide.
-func botName() string {
-	n := botNameSeq.Add(1)
-	var buf [12]byte
-	i := len(buf)
+// botName 生成机器人名："机" + 2 位桌号 62 进制 + 1 位座位号（1-8）。
+// 例：3 号桌座位 5 → 机035；12 号桌座位 7 → 机0c7（12 的 62 进制为 c）。
+// 桌内按座位唯一、跨桌按桌号位唯一，无需全局计数器，重启/多桌并发均不会重名。
+func botName(deskID, posID int) string {
+	// 桌号转 62 进制，不足 2 位左侧补零占位
+	d := deskID
+	var db [8]byte
+	i := len(db)
 	for {
 		i--
-		buf[i] = botName62[n%62]
-		n /= 62
-		if n == 0 {
+		db[i] = botName62[d%62]
+		d /= 62
+		if d == 0 {
 			break
 		}
 	}
-	// pad to 3 chars (base-62 has no leading-zero semantics, just insert '0')
-	for len(buf)-i < 3 {
+	for len(db)-i < 2 {
 		i--
-		buf[i] = '0'
+		db[i] = '0'
 	}
-	return "机" + string(buf[i:])
+	// 座位号 1-8（内部 PosID 为 0-7，展示时 +1）
+	return "机" + string(db[i:]) + strconv.Itoa(posID+1)
 }
 
 // FillBots fills every free seat with a ready bot and returns the filled seat
@@ -231,7 +228,7 @@ func (d *Desk) FillBots() []int {
 	for i := range d.Positions {
 		if d.Positions[i].State == 0 {
 			d.Positions[i].State = 2
-			d.Positions[i].UserName = botName()
+			d.Positions[i].UserName = botName(d.DeskID, d.Positions[i].PosID)
 			d.Positions[i].IsBot = true
 			filled = append(filled, d.Positions[i].PosID)
 		}
