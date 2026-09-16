@@ -50,6 +50,8 @@ func main() {
 	)
 	flag.Parse()
 
+	time.Local = time.FixedZone("CST", 8*60*60)
+
 	if *showVersion {
 		fmt.Printf("talkcards %s\n", version)
 		return
