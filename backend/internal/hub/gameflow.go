@@ -23,13 +23,18 @@ func (h *Hub) onPlayCard(s wssrv.Conn, data []card.Card) {
 	}
 	g := d.Game
 
+	// Unexpected error phase: restore the last good state, discard this play.
+	if g.Phase() == game.PhaseError {
+		h.recoverGame(d, c.posID)
+		return
+	}
+
 	// Reject manual plays while trusted out: racing the bot out-of-turn poisons the game.
 	if seat := d.Seat(c.posID); seat != nil && seat.Trustee {
 		h.emit(c, EvMessage, msgPayload{Msg: "托管中，请先取消托管再手动操作"})
 		return
 	}
 
-	// Out-of-turn valid plays poison the game (bug-for-bug: frame still broadcast, both events fire).
 	res := g.Play(c.posID, data)
 	h.applyPlayResult(d, c.posID, c, data, res)
 }
@@ -72,17 +77,42 @@ func (h *Hub) applyPlayResult(d *table.Desk, posID int, origin *Session, cards [
 			return
 		}
 		if g.Phase() == game.PhaseError {
-			h.logger.Error("对局进入错误状态（越序出牌毒化）", "desk", d.DeskID, "actor", posID)
-			if origin != nil {
-				h.emit(origin, EvPlayCardErr, "游戏出错")
-			}
+			h.recoverGame(d, posID)
+			return
 		}
+		// Save the last good state for error-phase rollback.
+		d.LastGood = g.Snapshot()
 	} else if origin != nil {
 		h.emit(origin, EvPlayCardErr, cards)
+		// Out-of-turn means a stale client rotation (lost/late CTX frame):
+		// re-push the turn frame so it can resync.
+		if res.Rejected != nil && res.Rejected.Rule == "turn" && g.Phase() == game.PhasePlaying {
+			h.logger.Warn("越序出牌被拒（客户端轮转状态过期），已重推轮转帧",
+				"desk", d.DeskID, "actor", posID, "turn", g.Turn())
+			h.emitTurnResync(origin, d)
+		}
 	} else {
 		h.logger.Warn("机器人出牌被拒", "desk", d.DeskID, "pos", posID, "cards", len(cards),
 			"phase", g.Phase(), "turn", g.Turn())
 	}
+	h.scheduleBotIfTurn(d)
+}
+
+// recoverGame rolls back to the last good state on an unexpected error phase
+// and replays recovery frames to the whole desk (spectators included) so the
+// game continues; with no snapshot (before the first lead) it just replays.
+func (h *Hub) recoverGame(d *table.Desk, actor int) {
+	if d.LastGood != nil {
+		d.Game.Restore(d.LastGood)
+	}
+	h.logger.Error("对局进入错误状态，已回滚到最近有效状态", "desk", d.DeskID, "actor", actor)
+	h.broadCastRoom(EvMessage, d.DeskID, msgPayload{Msg: "对局出现异常，已自动恢复，请继续出牌"}, nil)
+	h.sessions.each(func(c *Session) {
+		if c.deskID != d.DeskID {
+			return
+		}
+		h.replayGameFrames(c, d, c.posID < 0)
+	})
 	h.scheduleBotIfTurn(d)
 }
 
@@ -220,10 +250,16 @@ func (h *Hub) replayGameFrames(c *Session, d *table.Desk, redacted bool) {
 	}
 	h.emit(c, EvGameStart, start)
 	h.emit(c, EvShowTopCard, showTopCard{TopCards: g.TopCards(), DizhuPosID: g.DizhuPosID(), Timeout: playTiming})
+	h.emitTurnResync(c, d)
+}
+
+// emitTurnResync pushes the current table/turn frames; shared by reconnect
+// replay and out-of-turn rejection resync.
+func (h *Hub) emitTurnResync(c *Session, d *table.Desk) {
+	g := d.Game
 	if d.LastPlay != nil {
-		// After a pass, the standing valid play is still on the table —
-		// send it first so the reconnecter knows what to beat, but only
-		// while the table still has a beatable play.
+		// After a pass the standing valid play is still on the table: send it
+		// first so the receiver knows what to beat (only while one exists).
 		_, hasTop := g.TrickTop()
 		if d.LastPlay.IsPass && d.LastValidPlay != nil && hasTop {
 			h.emit(c, EvCtxPlayChange, replayFrame(d.LastValidPlay))
@@ -234,8 +270,8 @@ func (h *Hub) replayGameFrames(c *Session, d *table.Desk, redacted bool) {
 		}
 		h.emit(c, EvCtxPlayChange, last)
 	} else {
-		// Disconnected before the first lead: no cached frame — send a
-		// turn frame or the game deadlocks waiting on the reconnecter.
+		// Disconnected before the first lead: no cached frame — send a turn
+		// frame or the reconnecter never learns it is their turn (deadlock).
 		h.emit(c, EvCtxPlayChange, leadFrame(g.Turn()))
 	}
 }
@@ -376,6 +412,7 @@ func (h *Hub) startGame(deskID int) {
 	g.Start()
 	d.StartedAt = time.Now()
 	d.LastPlay = nil
+	d.LastGood = g.Snapshot() // opening snapshot: pre-first-lead errors can recover too
 	d.Players = d.PlayerSnapshot()
 	d.SetState(2)
 	h.broadCastGameStart(deskID, newGameStart(g))

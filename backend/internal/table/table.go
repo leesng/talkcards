@@ -69,7 +69,10 @@ type Desk struct {
 	// it. If the previous action was a pass, LastPlay alone doesn't show what
 	// is on the table to beat, so reconnect replays this frame before LastPlay.
 	LastValidPlay *PlaySnapshot `json:"-"`
-	Holds         []Hold        `json:"-"` // disconnect hold records (by user name)
+	// LastGood is the game snapshot after the last valid play; rolled back
+	// to when the game unexpectedly enters the error phase.
+	LastGood *game.Game `json:"-"`
+	Holds    []Hold     `json:"-"` // disconnect hold records (by user name)
 
 	HostPosID int `json:"-"` // host seat (first to sit); auto-transferred to the next occupied seat when the host leaves
 }
@@ -304,6 +307,7 @@ func (d *Desk) ResetGame() {
 	d.StartedAt = time.Time{}
 	d.LastPlay = nil
 	d.LastValidPlay = nil
+	d.LastGood = nil
 }
 
 // ClearTrustees clears all trustee flags (called at game over/abort). The

@@ -451,6 +451,8 @@
           deskId: '',
           hostPosId: -1, // host seat (first sitter, never transfers); -1 = no host
           isSpectator: false, // watching an in-progress game: no hand faces, no actions
+          actStamp: {}, // action cooldown stamps (double-click guard)
+          actLocks: {}, // in-flight action locks (block repeats until response)
           botConfirm: { show: false, empty: 0 }, // bot-fill confirmation dialog
           desks: [],
           client: '',
@@ -612,11 +614,6 @@
       mounted: function () {
         var self = this;
         this.$nextTick(function () {
-          document.oncontextmenu = function (e) {
-            e.preventDefault();
-            self.playCards();
-          };
-
           this.client = createClient(location.host);
 
           this.client.on('MESSAGE', function (data) {
@@ -764,6 +761,7 @@
 
             // The game starts straight in the play phase; SHOW_TOP_CARD sets state 2.
             this.botConfirm.show = false;
+            this.unlockAct('play'); // clear the in-flight lock on a new game
             this.initCards(data.cards);
             this.resetGameStats();
 
@@ -890,15 +888,22 @@
             }
             this.posState[this.roomState.ctxPos].isPass = false;
             this.roomState.timeout = data.timeout;
+            // Fallback: release the in-flight lock in case the response frame was dropped
+            this.unlockAct('play');
             this.startTimer(this.autoPlayCards.bind(this));
 
 
           }.bind(this));
 
           this.client.on('PLAY_CARD_ERROR', function (data) {
+            // Unlock only; no auto retry
+            this.unlockAct('play');
             layer.msg('你的牌不符合规则');
           }.bind(this))
           this.client.on('PLAY_CARD_SUCCESS', function (cards) {
+            // Unlock and stop the timer; the next CTX frame restarts it
+            this.unlockAct('play');
+            this.startTimer(false);
             this.removeCards('p3', cards);
             this.posState.p3.ctxCards = cards;
           }.bind(this))
@@ -1244,12 +1249,35 @@
             setTimeout(function () { self.randomSpinning = false; }, 500);
           });
         },
+        // Double-click guard: ignore repeated triggers within the cooldown
+        onceAct: function (key, cool) {
+          var now = Date.now();
+          cool = cool || 500;
+          if (now - (this.actStamp[key] || 0) < cool) {
+            return false;
+          }
+          this.actStamp[key] = now;
+          return true;
+        },
+        // Generic in-flight lock: true on acquire; released by response or fallback
+        lockAct: function (key) {
+          if (this.actLocks[key]) {
+            return false;
+          }
+          this.actLocks[key] = true;
+          return true;
+        },
+        unlockAct: function (key) {
+          this.actLocks[key] = false;
+        },
         login: function () {
+          if (!this.onceAct('login')) return;
           if (!this.validateLogin()) return;
           layer.load({ type: 3 });
           this.client.emit('LOGIN', this.posState.p3.name);
         },
         showHistory: function (page) {
+          if (!this.onceAct('history')) return;
           page = parseInt(page, 10) || 1; // guard against event objects/undefined
           this.historyPage = page;
           layer.load({ type: 3 });
@@ -1443,17 +1471,20 @@
           }
         },
         spectate: function (deskId) {
+          if (!this.onceAct('seat')) return;
           layer.load({ type: 3 });
           this.client.emit('SPECTATE', { deskId: deskId });
         },
         sitDown: function (deskId, pos) {
           if (pos.state === 0) {
+            if (!this.onceAct('seat')) return;
             layer.load({ type: 3 });
             this.client.emit('SITDOWN', { deskId: deskId, posId: pos.posId });
 
           }
         },
         exitRoom: function () {
+          if (!this.onceAct('exit')) return;
           this.client.emit('UNSITDOWN');
           layer.load({ type: 3 });
         },
@@ -1491,7 +1522,8 @@
         },
 
 
-        playCards: function (cards) {
+        // In-flight play lock: no second play between emit and SUCCESS/ERROR
+        playCards: function () {
           if (this.isSpectator) {
             return;
           }
@@ -1501,6 +1533,9 @@
           if (this.roomState.ctxPos !== 'p3') {
             return;
           }
+          if (this.posState.p3.trustee) {
+            return;
+          }
 
           var cards = this.getSelectdCards();
           var ret = validate(cards);
@@ -1508,12 +1543,29 @@
             return layer.msg('你的牌不符合规则');
           }
 
+          if (!this.lockAct('play')) {
+            return;
+          }
+          this.startTimer(false);
           this.client.emit('PLAY_CARD', cards);
         },
         passCards: function () {
           if (this.isSpectator) {
             return;
           }
+          if (this.roomState.state !== 2) {
+            return;
+          }
+          if (this.roomState.ctxPos !== 'p3') {
+            return;
+          }
+          if (this.posState.p3.trustee) {
+            return;
+          }
+          if (!this.lockAct('play')) {
+            return;
+          }
+          this.startTimer(false);
           this.client.emit('PLAY_CARD', [])
         },
         // Hint: auto-select the tightest group beating the last play (selection only).
@@ -1572,6 +1624,9 @@
             var leading = !this.roomState.ctxCard.ctxPos || this.roomState.ctxCard.ctxPos === 'p3';
             var hand = this.posState.p3.cards;
             var cards = leading && hand.length ? [hand[0]] : [];
+            if (!this.lockAct('play')) {
+              return;
+            }
             this.client.emit('PLAY_CARD', cards);
           }
         },
@@ -1581,12 +1636,14 @@
           if (this.isSpectator) {
             return;
           }
+          if (!this.onceAct('trustee')) return;
           this.client.emit('TOGGLE_TRUSTEE');
         },
         prepare: function () {
           if (this.isSpectator) {
             return;
           }
+          if (!this.onceAct('prepare')) return;
           layer.load({ type: 3 });
           this.client.emit('PREPARE');
         },
@@ -1594,6 +1651,7 @@
           if (this.isSpectator) {
             return;
           }
+          if (!this.onceAct('prepare')) return;
           layer.load({ type: 3 });
           this.client.emit('CANCEL_PREPARE');
         },
@@ -1612,10 +1670,12 @@
             this.botConfirm = { show: true, empty: empty };
             return;
           }
+          if (!this.onceAct('start')) return;
           this.client.emit('HOST_START_GAME');
         },
         confirmBotFill: function () {
           this.botConfirm.show = false;
+          if (!this.onceAct('start')) return;
           this.client.emit('HOST_START_GAME', { fillBots: true });
         },
         cancelBotFill: function () {
