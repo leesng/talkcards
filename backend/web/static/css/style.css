@@ -286,11 +286,23 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 }
 
 /* ---------------- 房间 / 牌桌 ---------------- */
-/* 房间地面：四周是深色木地板，中间摆一张牌桌（有投影地"坐"在地面上） */
+/* 房间地面：四周是深色木地板，中间摆一张牌桌（有投影地"坐"在地面上）。
+   房间为左右两栏 flex：左边 .room-table 装原牌桌，右边 .chat-panel 装公共聊天。
+   .room-table 上的 transform（translateZ(0)）会让其内部所有 position:fixed 元素
+   改以本容器为参照而非视口，从而桌面几何随左侧减宽自动收缩、仍保持各座位相对比例。 */
 .room {
   overflow: hidden;
+  display: flex;
+  flex-direction: row;
   background:
     radial-gradient(140% 120% at 50% -20%, #3a2a1c 0%, #241a11 45%, #120c07 100%);
+}
+.room-table {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  transform: translateZ(0); /* 关键：使内部 fixed 元素以本容器为包含块 */
 }
 
 /* 木质桌沿。
@@ -1280,4 +1292,162 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   border-radius: 16px;
   padding: 4px 16px;
   pointer-events: none;
+}
+
+/* ==========================================================
+   公共聊天面板（右侧栏）
+   ----------------------------------------------------------
+   8 名玩家均可查看与发言；交流公开、对手同样可见。
+   与 .room-table 并列为 flex 两栏，占满房间右缘整高。
+   ========================================================== */
+.chat-panel {
+  flex: 0 0 320px;
+  width: 320px;
+  height: 100%;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(255, 255, 255, 0.06), transparent 60%),
+    linear-gradient(180deg, rgba(12, 24, 34, 0.96), rgba(7, 15, 22, 0.98));
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: -14px 0 34px rgba(0, 0, 0, 0.4);
+}
+
+.chat-header {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.chat-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--gold);
+}
+.chat-sub {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 1px;
+}
+
+.chat-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 10px 14px;
+  scroll-behavior: smooth;
+}
+.chat-empty {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 12px;
+  text-align: center;
+  margin-top: 40px;
+  letter-spacing: 1px;
+}
+
+.chat-msg {
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.chat-time {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 11px;
+  margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.chat-name {
+  font-weight: 700;
+}
+/* 偶数座（A 队）蓝、奇数座（B 队）红——与阵营配色统一 */
+.chat-msg-team0 .chat-name { color: #5c9df0; }
+.chat-msg-team1 .chat-name { color: #f87f6e; }
+.chat-colon { color: rgba(255, 255, 255, 0.5); }
+.chat-content { color: rgba(255, 255, 255, 0.92); }
+
+/* 系统消息：居中灰字，弱化不抢戏 */
+.chat-msg-sys { text-align: center; }
+.chat-sys-text {
+  display: inline-block;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.chat-quick {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.chat-quick-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: none;
+  transition: background .12s ease, border-color .12s ease;
+}
+.chat-quick-btn:hover {
+  background: rgba(34, 184, 207, 0.24);
+  border-color: var(--accent);
+  color: #fff;
+  transform: none;
+}
+
+.chat-input-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 14px;
+}
+.chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  line-height: 36px;
+  font-size: 14px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border-radius: 8px;
+}
+.chat-input::placeholder { color: rgba(255, 255, 255, 0.4); }
+.chat-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(34, 184, 207, 0.22);
+}
+.chat-send {
+  flex: none;
+  padding: 0 18px;
+  height: 36px;
+  line-height: 36px;
+  font-size: 14px;
+  letter-spacing: 2px;
+}
+
+.chat-readonly {
+  flex: none;
+  padding: 12px 14px;
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: rgba(255, 255, 255, 0.4);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }

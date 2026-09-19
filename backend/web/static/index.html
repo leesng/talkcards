@@ -66,6 +66,10 @@
         </div>
       </div>
 
+      <!-- 左侧：原牌桌界面。.room-table 上的 transform 会让内部所有 position:fixed
+           元素以本容器为参照（而非视口），从而在右侧留出聊天面板的同时保持桌面几何不变 -->
+      <div class="room-table">
+
       <!-- 牌桌：木沿造型由 CSS 画（.table-rim），绒布纹理来自 images/desktop.svg（.table-felt） -->
       <div class="table-rim">
         <div class="table-felt"></div>
@@ -360,6 +364,37 @@
           </template>
         </div>
       </div>
+      </div><!-- /room-table -->
+
+      <!-- 右侧：公共聊天面板（8 名玩家均可查看与发言；交流公开、对手也可见，可传递打牌信息、商定策略） -->
+      <aside class="chat-panel">
+        <div class="chat-header">
+          <span class="chat-title">公共聊天</span>
+          <span class="chat-sub">发言全场可见</span>
+        </div>
+        <div class="chat-messages scroll-bar" ref="chatMessages">
+          <div class="chat-empty" v-if="!msgList.length">暂无消息，发句话和队友商量策略吧</div>
+          <div v-for="m in msgList" :key="m.id" class="chat-msg" :class="m.type === 'SYS' ? 'chat-msg-sys' : ('chat-msg-team' + (m.posId % 2))">
+            <template v-if="m.type === 'SYS'">
+              <span class="chat-sys-text">{{ m.content }}</span>
+            </template>
+            <template v-else>
+              <span class="chat-time">{{ m.time }}</span>
+              <span class="chat-name">{{ m.name }}</span>
+              <span class="chat-colon">：</span>
+              <span class="chat-content">{{ m.content }}</span>
+            </template>
+          </div>
+        </div>
+        <div class="chat-quick" v-if="!isSpectator">
+          <button v-for="(q, i) in msgBox" :key="i" class="chat-quick-btn" @click="quickMsg(q)">{{ q }}</button>
+        </div>
+        <div class="chat-input-bar" v-if="!isSpectator">
+          <input class="input chat-input" v-model="chatDraft" placeholder="输入发言，回车发送" @keyup.enter="sendMsg" />
+          <button class="chat-send" @click="sendMsg">发送</button>
+        </div>
+        <div class="chat-readonly" v-else>观战模式 · 仅可查看，不可发言</div>
+      </aside>
     </div>
 
   </div>
@@ -445,6 +480,7 @@
             '我有12个2！',
           ],
           msgList: [],
+          chatDraft: '', // 公共聊天输入框内容
 
           where: 0, // 0 login screen, 1 lobby, 2 room
           posId: '',
@@ -640,6 +676,7 @@
             this.where = 2;
             this.isSpectator = false;
             this.posId = data.posId;
+            this.msgList = [];
             this.deskId = data.deskId;
             if (typeof data.hostPosId === 'number') this.hostPosId = data.hostPosId;
             data.posInfos.forEach(function (pos) {
@@ -657,6 +694,7 @@
             this.isSpectator = true;
             this.posId = 3;
             this.deskId = data.deskId;
+            this.msgList = [];
             if (typeof data.hostPosId === 'number') this.hostPosId = data.hostPosId;
             data.posInfos.forEach(function (pos) {
               this.updatePosStatus(pos.posId, pos.state, pos.userName, pos.isBot, pos.trustee);
@@ -680,6 +718,7 @@
             this.isSpectator = false;
             this.posId = data.posId;
             this.deskId = data.deskId;
+            this.msgList = [];
             if (typeof data.hostPosId === 'number') this.hostPosId = data.hostPosId;
             data.posInfos.forEach(function (pos) {
               this.updatePosStatus(pos.posId, pos.state, pos.userName, pos.isBot, pos.trustee);
@@ -1113,8 +1152,14 @@
               id: data.id,
               time: data.time,
               name: name,
+              posId: data.posId,
               content: data.msg
-            })
+            });
+            // 新消息到达时滚动到底部
+            this.$nextTick(function () {
+              var el = this.$refs.chatMessages;
+              if (el) { el.scrollTop = el.scrollHeight; }
+            }.bind(this));
           }.bind(this));
 
           this.client.on('HISTORY_LIST', function (data) {
@@ -1465,6 +1510,8 @@
           this.isSpectator = false;
           this.posState.p3.state = 0;
           this.roomState.state = 0;
+          this.msgList = [];
+          this.chatDraft = '';
         },
         getSelectdCards: function () {
           return this.posState.p3.cards.filter(function (card) {
@@ -1667,16 +1714,20 @@
           }.bind(this))
         },
 
-        sendMessage: function (e) {
+        sendMsg: function () {
           if (this.isSpectator) {
             return; // spectators watch chat but cannot post
           }
-          var el = e ? e.target : this.$refs.msgInput;
-          var msg = el.value;
-          el.value = '';
-          if (msg) {
-            this.client.emit('USER_MESSAGE', msg);
+          var msg = this.chatDraft.trim();
+          if (!msg) return;
+          this.chatDraft = '';
+          this.client.emit('USER_MESSAGE', msg);
+        },
+        quickMsg: function (q) {
+          if (this.isSpectator) {
+            return;
           }
+          this.client.emit('USER_MESSAGE', q);
         },
         quickJoin: function () {
           layer.load({ type: 3 });
