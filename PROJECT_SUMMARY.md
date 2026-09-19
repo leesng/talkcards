@@ -107,9 +107,9 @@ CLI 参数：`--port/-p`(8000)、`--host`、`--reconnect-timeout`(秒,600,0=无�
 ### 6.3 `internal/game` —— 牌局状态机（纯领域，无 I/O、无 JSON tag）
 `game.go`：`Phase`(Idle/Playing/Over/Error)、`seats[8]`、`trick`(桌心当前压手+滚动分)、`turn`/`leader`。
 - `Start()` 直接进入出牌阶段（**无叫分阶段**）；`deal()` 发牌（每家 40 张 + 余 4 张按 `last4` 随机补 1）；`whoFirst()` 红桃3最多→比3总数→随机（**有意偏离 Node 原版**）。
-- `Play(pos,cards)` → `PlayResult{Accepted,Applied,HasShape,Shape}`：空牌=过牌直接 apply；规则链 `playRules` = `rulePhasePlaying→ruleHandHas→ruleClassify→ruleBeatTable`（**不检查轮转**，越序合法牌在 apply 阶段把状态机毒化为 PhaseError）。
-- 轮转、收分、接风（`nextGroupPosID`，出完后队友接牌权）、`isGameOver`（全队出完带走败方未出手分 / 出完者抓分累达 300）见 `game.go`；`settle.go` `TeamScores()` 供落库。
-- 出牌越序会把状态机置 `PhaseError` 且不再广播有效回合，客户端必须严格按 `CTX_PLAY_CHANGE.posId` 出牌。
+- `Play(pos,cards)` → `PlayResult{Accepted,Applied,HasShape,Shape,Rejected}`：**先查轮转**——越序（`pos != turn`）直接 `Rejected{Rule:"turn"}`、无任何状态变更；空牌=过牌直接 apply；其余走规则链 `playRules` = `rulePhasePlaying→ruleHandHas→ruleClassify→ruleBeatTable` 校验后 apply。**（2026-09 上游 `2753cdf` 已移除旧版的「越序毒化」语义）**
+- `apply` 负责轮转推进 / 收分 / 接风（`nextGroupPosID`，出完后队友接牌权）/ `isGameOver`（全队出完带走败方未出手分 / 出完者抓分累达 300）；`settle.go` `TeamScores()` 供落库。
+- 异常恢复：`Game` 提供 `Snapshot()/Restore()`，`hub` 在桌的 `Desk.LastGood` 保存最近一次有效状态；意外进入 `PhaseError` 时由 `recoverGame` 回滚并 `replayGameFrames` 全桌重放。
 
 ### 6.4 `internal/table` —— 大厅/桌/座位
 `table.go`：`Lobby`(20 桌 × 8 座)、`Desk`(挂 `Game`、开局快照 `StartedAt/Players`、`LastPlay/LastValidPlay`、`Holds` 断线保留)、`Seat`(state 0空/1未准备/2已准备 + `IsBot` + `Trustee`)。
@@ -120,7 +120,7 @@ CLI 参数：`--port/-p`(8000)、`--host`、`--reconnect-timeout`(秒,600,0=无�
 ### 6.5 `internal/hub` —— 业务总控（GameServer 等价物）
 按职责分文件，**所有 handler 在单一 `h.mu` 下串行执行**，发送走异步 pump，落库走异步单 worker（避免磁盘 I/O 阻塞全局锁）：
 - `hub.go`：路由注册、登录/进出房间/准备/开牌/托管切换/观战、`seatedClient`(真人座位)/`clientInRoom`(含观战) 守卫。
-- `gameflow.go`：出牌 `onPlayCard`、`applyPlayResult`（真人/机器人共用，越序毒化、`Clear` 标记、终局落库清座）、机器人定时出动 `scheduleBotIfTurn/botAct`、断线保留/超时 `onReconnectTimeout`、开局/终止 `startGame/terminateGame/recordGame`。
+- `gameflow.go`：出牌 `onPlayCard`、`applyPlayResult`（真人/机器人共用；**越序被拒→重推轮转帧 resync**、`Clear` 标记、`PhaseError` 时 `recoverGame` 回滚、终局落库清座）、机器人定时出动 `scheduleBotIfTurn/botAct`、断线保留/超时 `onReconnectTimeout`、开局/终止 `startGame/terminateGame/recordGame`。
 - `session.go`：`Session{conn,person,deskID,posID,out}`；`sessionRegistry`（list 保序 + map O(1)）。
 - `broadcast.go`：`emit`（单发入队）、`broadCastHouse`（大厅）、`broadCastRoom`（桌内，可排除发起者）、`broadCastGameStart`（玩家全量手牌 / 观战者脱敏）。
 - `translator.go`：领域→wire 载荷（数组→`{"0":..}` 数字键对象、重连帧重建、红桃统计）。
@@ -238,7 +238,7 @@ CLI 参数：`--port/-p`(8000)、`--host`、`--reconnect-timeout`(秒,600,0=无�
 
 - **事件契约铁律**：`events.go` 载荷字段名与 `index.html` 逐字对应，改后端结构体字段/JSON tag 必须同步前端 `.on` 处理器。
 - **压牌规则三处同步**：改 `card.Shape.Beats`/`Classify` 必须同步 `parser.js`（提示逻辑）与 `e2e-audit.js` 的 `Replayer.beats`。
-- **越序毒化**：`game.Play` 越序合法牌会置 PhaseError 且不再广播有效回合；e2e 客户端用 `myTurn/busy` 守卫 + 出牌后**轮询等待** SUCCESS/ERROR 帧（同步读会误判被拒→重出→越序）。
+- **越序出牌**：`game.Play` 越序（posID≠轮转者）现在**拒绝并重推轮转帧 resync**（`PLAY_CARD_ERROR` + `emitTurnResync`），**不再毒化**；意外进入 `PhaseError` 时 `recoverGame` 回滚 `Desk.LastGood`。前端有 `onceAct`（双击冷却）与 `lockAct/unlockAct`（出牌在途锁）防重复出牌；e2e 出牌后仍须**轮询等待** SUCCESS/ERROR 帧再去下一步。
 - **重连必等 replay**：e2e 重连后必须 `wait('GAME_START')` 显式等重放帧；两帧分属不同 tick，直接读 pending 会扑空。
 - **观战视角**：观战者以 posId=3 视角渲染，`isSpectator` 守卫所有操作/出牌/聊天。
 - **背靠背多帧**：纯 WS 下多帧可能同 tick 派发；动态 on/off 绝不能消费 pending（会幽灵完成）。
