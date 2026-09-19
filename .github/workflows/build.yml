@@ -1,0 +1,77 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: vet + test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          check-latest: true
+      - run: go vet ./...
+      - run: go test ./... -count=1
+
+  build:
+    name: build binaries
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          check-latest: true
+      - name: Build all targets
+        id: build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p target
+          version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+          ldflags="-s -w -X main.version=${version}"
+          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "${ldflags}" -o target/talkcards-linux-amd64 ./cmd/server
+          GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags "${ldflags}" -o target/talkcards-linux-arm64 ./cmd/server
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "${ldflags}" -o target/talkcards-windows-amd64.exe ./cmd/server
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          ls -lh target
+      - uses: actions/upload-artifact@v4
+        with:
+          name: talkcards-binaries
+          path: backend/target/
+          if-no-files-found: error
+
+  release:
+    name: github release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: talkcards-binaries
+          path: dist
+      - name: List assets
+        run: ls -lh dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
