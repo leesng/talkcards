@@ -1,8 +1,6 @@
 # 沟通牌（talkcards）
 
-沟通牌是一款从华为内部传出的扑克玩法（"跑得快"类团队变种）。本项目将其线上化：Go 单二进制（前端已嵌入），SQLite 持久化账号与战绩，支持断线重连与历史战绩，适合团队团建。
-
-项目地址：https://github.com/peng-mj/talkcards
+沟通牌是一款从HW内部传出的扑克玩法（"跑得快"类团队变种）。本项目将其线上化：单二进制即可运行，持久化账号与战绩，支持托管、人机补位、断线重连、历史战绩等功能，适合团队团建。
 
 ## 游戏规则
 
@@ -12,13 +10,13 @@
 
 ## 快速开始
 
-从 [Releases](https://github.com/peng-mj/talkcards/releases) 下载单文件二进制（`talkcards-linux-amd64` / `talkcards-linux-arm64`）：
+从 [Releases](https://github.com/mjun11/talkcards/releases) 下载单文件二进制：
 
 ```sh
 chmod +x talkcards-linux-amd64 && ./talkcards-linux-amd64
 ```
 
-浏览器打开 `http://localhost:8000`，输入用户名即玩。
+浏览器打开 `http://localhost:8000`，无需注册，输入用户名即玩。
 
 ## 开发
 
@@ -33,10 +31,10 @@ node backend/scripts/e2e-bot.js      # e2e 协议验收（先 npm install）
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--port, -p` | 8000 | 监听端口（或 `PORT` 环境变量） |
-| `--host` | 所有接口 | 监听地址 |
+| `--host` | 0.0.0.0 | 监听地址 |
 | `--reconnect-timeout` | 600 | 对局中断线保留座位秒数，0 为无限 |
 
-战绩经 SQLite 持久化（固定 `./talkcards.db`，始终开启）。
+使用纯go的Sqlite战绩经持久化。
 
 ## License
 

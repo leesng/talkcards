@@ -232,26 +232,38 @@ func TestScoreOf(t *testing.T) {
 	}
 }
 
-// Out of turn: a legal play out of turn is accepted but not applied and
-// poisons the game; an illegal play is rejected without poisoning.
 func TestWrongTurn(t *testing.T) {
 	g := playingGame()
 	g.seats[3].Hand = cards(5, 0)
 	g.turn = 1
 	g.trick = Trick{Pos: 1, Top: shape(card.KindSingle, 4, 1)}
-	res := g.Play(3, cards(5, 0))
-	if !res.Accepted || res.Applied {
-		t.Fatalf("越序合法牌应 Accepted&&!Applied，实际 %+v", res)
+	res := g.Play(3, cards(5, 0)) // legal card, wrong turn
+	if res.Accepted || res.Applied {
+		t.Fatalf("越序合法牌应被拒绝，实际 %+v", res)
 	}
-	if g.Phase() != PhaseError {
-		t.Fatalf("越序应毒化对局，实际 %v", g.Phase())
+	if res.Rejected == nil || res.Rejected.Rule != "turn" {
+		t.Fatalf("越序应带 turn 违规，实际 %+v", res.Rejected)
+	}
+	if g.Phase() != PhasePlaying || len(g.seats[3].Hand) != 1 || g.Turn() != 1 {
+		t.Fatalf("越序不应有任何状态变更: phase=%v hand=%d turn=%d", g.Phase(), len(g.seats[3].Hand), g.Turn())
 	}
 
+	// Out-of-turn pass is rejected too (empty hand used to skip the turn gate)
+	resPass := g.Play(3, nil)
+	if resPass.Accepted || g.Turn() != 1 {
+		t.Fatalf("越序过牌应被拒绝: %+v turn=%d", resPass, g.Turn())
+	}
+
+	// Pass works when it is your turn
 	g2 := playingGame()
-	g2.turn = 1
-	res2 := g2.Play(3, cards(5, 0)) // card not in hand
-	if res2.Accepted || g2.Phase() != PhasePlaying {
-		t.Fatalf("不合法牌不应毒化: res=%+v phase=%v", res2, g2.Phase())
+	g2.seats[3].Hand = cards(5, 0)
+	g2.seats[4].Hand = cards(15, 0)
+	g2.seats[5].Hand = cards(15, 1)
+	g2.turn = 3
+	g2.trick = Trick{Pos: 1, Top: shape(card.KindSingle, 4, 1)}
+	res2 := g2.Play(3, nil)
+	if !res2.Accepted || !res2.Applied || g2.Turn() == 3 || g2.Phase() != PhasePlaying {
+		t.Fatalf("轮到自己时过牌应生效: %+v turn=%d phase=%v", res2, g2.Turn(), g2.Phase())
 	}
 }
 
@@ -462,7 +474,7 @@ func TestPassOnOwnLead(t *testing.T) {
 
 	res := g.Play(0, nil)
 	if !res.Accepted || !res.Applied || g.Turn() != 1 {
-		t.Fatalf("首出者过牌后应轮到 1，实际 %d（%+v）", g.Turn(), res)
+		t.Fatalf("首出者过牌后应轮到1，实际 %d（%+v）", g.Turn(), res)
 	}
 	if g.TrickPos() != 0 || g.trick.Top.Rank != 5 {
 		t.Fatalf("桌面牌应保持不变: %+v", g.trick)

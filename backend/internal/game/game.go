@@ -85,6 +85,28 @@ func (g *Game) Init() {
 	g.loser = nil
 }
 
+// Snapshot deep-copies the state for the recovery mechanism.
+func (g *Game) Snapshot() *Game {
+	c := *g
+	for i := range g.seats {
+		c.seats[i].Hand = append([]card.Card(nil), g.seats[i].Hand...)
+	}
+	c.winner = append([]int(nil), g.winner...)
+	c.loser = append([]int(nil), g.loser...)
+	return &c
+}
+
+// Restore rolls back all state from a snapshot.
+func (g *Game) Restore(snap *Game) {
+	s := *snap
+	for i := range snap.seats {
+		s.seats[i].Hand = append([]card.Card(nil), snap.seats[i].Hand...)
+	}
+	s.winner = append([]int(nil), snap.winner...)
+	s.loser = append([]int(nil), snap.loser...)
+	*g = s
+}
+
 // Start deals and picks the first player, entering the playing phase
 // directly — the bidding phase was deliberately removed; the leader leads.
 func (g *Game) Start() {
@@ -169,8 +191,6 @@ func (v *Violation) Error() string { return v.Rule + ": " + v.Reason }
 // Rule is one validation step; nil means passed.
 type Rule func(*PlayContext) *Violation
 
-// playRules deliberately does not check turn order, matching the legacy
-// Validate-then-Next semantics; out-of-turn is caught in Play's apply stage.
 var playRules = []Rule{rulePhasePlaying, ruleHandHas, ruleClassify, ruleBeatTable}
 
 func rulePhasePlaying(ctx *PlayContext) *Violation {
@@ -227,19 +247,24 @@ func ruleBeatTable(ctx *PlayContext) *Violation {
 }
 
 // PlayResult is the outcome of one play attempt:
-//   - Accepted=false: illegal cards (legacy hub sent PLAY_CARD_ERROR), no state change
-//   - Accepted=true, Applied=false: out of turn; the game is poisoned to PhaseError (legacy Next semantics)
+//   - Accepted=false: rejected (illegal cards or out of turn), no state change
 //   - Accepted=true, Applied=true: applied normally (play or pass)
 type PlayResult struct {
 	Accepted bool
 	Applied  bool
-	HasShape bool       // hit a shape (false on pass/reject; true even when out of turn but legal)
+	HasShape bool       // hit a shape (false on pass/reject)
 	Shape    card.Shape // the hit shape, valid when HasShape; wire key/type come from Rank/TypeName
+	Rejected *Violation // set when Accepted=false; Rule=="turn" marks out-of-turn
 }
 
 // Play handles one play attempt. An empty hand means pass: validation is
 // skipped and it goes straight to apply, matching the legacy hub.
 func (g *Game) Play(pos int, cards []card.Card) PlayResult {
+	// Out of turn: always rejected with no state change (intentional drop of
+	// the legacy poison semantics; triggers reproduced in scripts/poison-repro.js).
+	if pos != g.turn {
+		return PlayResult{Rejected: &Violation{"turn", "还没轮到你出牌"}}
+	}
 	res := PlayResult{Accepted: len(cards) == 0}
 	if !res.Accepted {
 		ctx := g.validatePlay(pos, cards)
@@ -262,15 +287,8 @@ func (g *Game) validatePlay(pos int, cards []card.Card) *PlayContext {
 	return ctx
 }
 
-// apply is the legacy Next semantics: an out-of-turn play poisons the game;
-// during playing it advances rotation/trick/scoring/wind relay/game-over.
+// apply advances rotation/trick/scoring/wind relay/game-over.
 func (g *Game) apply(pos int, cards []card.Card, res PlayResult) PlayResult {
-	if pos != g.turn {
-		// Should not normally happen: out-of-turn play poisons the game;
-		// clients must play strictly per CTX_PLAY_CHANGE.
-		g.phase = PhaseError
-		return res
-	}
 	if g.phase == PhasePlaying {
 		res.Applied = true
 
