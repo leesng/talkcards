@@ -4,14 +4,9 @@
 // 不改动任何后端 Go / 前端 JS，不依赖服务端 fillBots。
 'use strict';
 
-const { loadConfig } = require('./ai-config');
+const { loadConfigs } = require('./ai-config');
 const LLM = require('./ai-LLM');
 const shape = require('./ai-shape');
-
-const cfg = loadConfig();
-
-function log(...args) { console.log('[ai-bot]', ...args); }
-function dbg(...args) { if (cfg.bot.verbose) console.log('[ai-bot]', ...args); }
 
 // 纯 WebSocket 客户端：帧到达时若没有对应监听器则先缓冲（背靠背多帧同一 tick）。
 class WsClient {
@@ -89,6 +84,9 @@ class AiBot {
     this.quickJoinRetrying = false;
   }
 
+  log(...args) { console.log('[ai-bot:' + this.cfg.bot.name + ']', ...args); }
+  dbg(...args) { if (this.cfg.bot.verbose) console.log('[ai-bot:' + this.cfg.bot.name + ']', ...args); }
+
   start() {
     this.attachSocket();
     this.connect();
@@ -128,7 +126,7 @@ class AiBot {
     const shutdown = () => {
       if (this.stopping) return;
       this.stopping = true;
-      log('收到退出信号，正在退出……');
+      this.log('收到退出信号，正在退出……');
       this.sock.close();
       process.exit(0);
     };
@@ -140,14 +138,14 @@ class AiBot {
 
   onLoginSuccess() {
     this.retry = 0;
-    log('登录成功：', this.cfg.bot.name);
+    this.log('登录成功：', this.cfg.bot.name);
     if (!this.cfg.llm.apiKey) {
-      log('未配置 LLM apiKey，将使用规则兜底策略出牌、且不主动发言（可设置 OPENAI_API_KEY 或 ai-config.json）');
+      this.log('未配置 LLM apiKey，将使用规则兜底策略出牌、且不主动发言（可设置 OPENAI_API_KEY 或 ai-config.json）');
     }
     // 游戏中掉线后的重连：服务器会自动坐回并重放，无需重新入座。
     if (this.expectReconnect) {
       this.expectReconnect = false;
-      log('等待服务器重连续局（服务器会推送 RECONNECT + 重放帧）……');
+      this.log('等待服务器重连续局（服务器会推送 RECONNECT + 重放帧）……');
       this.reconnectWatch = setTimeout(() => {
         // 兜底：对局若已终止、服务器不重连，则退回到正常入座。
         if (this.phase !== 'playing') this.freshJoin();
@@ -162,13 +160,13 @@ class AiBot {
       this.emitQuickJoin();
     } else {
       const { deskId, posId } = this.cfg.bot.join;
-      log('入座 桌', deskId, '座', posId);
+      this.log('入座 桌', deskId, '座', posId);
       this.sock.emit('SITDOWN', { deskId, posId });
     }
   }
 
   onLoginFail(d) {
-    log('登录失败：', d && d.msg);
+    this.log('登录失败：', d && d.msg);
     this.stopping = true;
     process.exit(1);
   }
@@ -182,10 +180,10 @@ class AiBot {
   onQuickJoin(d) {
     this.quickJoinRetrying = false;
     if (d && d.success) {
-      log('快速入座 桌', d.deskId, '座', d.posId);
+      this.log('快速入座 桌', d.deskId, '座', d.posId);
       this.sock.emit('SITDOWN', { deskId: d.deskId, posId: d.posId });
     } else {
-      log('暂无空位，3 秒后重试快速入座……');
+      this.log('暂无空位，3 秒后重试快速入座……');
       setTimeout(() => this.emitQuickJoin(), 3000);
     }
   }
@@ -195,17 +193,17 @@ class AiBot {
     this.deskId = d.deskId;
     if (typeof d.hostPosId === 'number') this.hostPosId = d.hostPosId;
     (d.posInfos || []).forEach((p) => this.updateSeat(p));
-    log('已入座 桌', this.deskId, '座', this.posId, '（主持人座位', this.hostPosId, '）');
+    this.log('已入座 桌', this.deskId, '座', this.posId, '（主持人座位', this.hostPosId, '）');
     if (this.cfg.bot.autoPrepare) this.sock.emit('PREPARE');
   }
 
   onSitdownError(d) {
-    log('入座失败：', d && d.msg);
+    this.log('入座失败：', d && d.msg);
     // 位置被占：快速入座模式下重新找位；固定模式则稍后重试。
     if (this.cfg.bot.join.mode === 'quickJoin') {
       setTimeout(() => this.emitQuickJoin(), 2000);
     } else {
-      log('3 秒后重试固定入座……');
+      this.log('3 秒后重试固定入座……');
       setTimeout(() => {
         const { deskId, posId } = this.cfg.bot.join;
         this.sock.emit('SITDOWN', { deskId, posId });
@@ -219,7 +217,7 @@ class AiBot {
     this.posId = d.posId;
     if (typeof d.hostPosId === 'number') this.hostPosId = d.hostPosId;
     (d.posInfos || []).forEach((p) => this.updateSeat(p));
-    log('断线重连，坐回 桌', this.deskId, '座', this.posId);
+    this.log('断线重连，坐回 桌', this.deskId, '座', this.posId);
   }
 
   onHostChange(d) {
@@ -234,7 +232,7 @@ class AiBot {
       userName: d.userName !== undefined ? d.userName : prev.userName,
       isBot: d.isBot != null ? d.isBot : prev.isBot,
     };
-    dbg('座位状态：', d.posId, this.seats[d.posId]);
+    this.dbg('座位状态：', d.posId, this.seats[d.posId]);
     this.maybeHostStart();
   }
 
@@ -248,7 +246,7 @@ class AiBot {
   }
 
   onPrepareSuccess() {
-    log('已准备');
+    this.log('已准备');
     this.updateSeat({ posId: this.posId, state: 2, userName: this.cfg.bot.name });
     this.maybeHostStart();
   }
@@ -267,14 +265,14 @@ class AiBot {
 
     if (empty === 0 && filled === 8 && states.every((s) => s === 2)) {
       // 8 人坐满且全部准备
-      log('8 人坐满且全部准备，主持人开局');
+      this.log('8 人坐满且全部准备，主持人开局');
       this.hostStarted = true;
       this.sock.emit('HOST_START_GAME');
       return;
     }
     if (empty > 0 && this.cfg.bot.host.fillBots && states.every((s) => s === 0 || s === 2)) {
       // 有空位，但允许填充机器人补位
-      log('有', empty, '个空位，按配置填充机器人开局');
+      this.log('有', empty, '个空位，按配置填充机器人开局');
       this.hostStarted = true;
       this.sock.emit('HOST_START_GAME', { fillBots: true });
       return;
@@ -295,12 +293,12 @@ class AiBot {
     this.standingPos = null;
     this.tmpFeng = 0;
     this.sumFeng = {};
-    log('对局开始，手牌', this.hand.length, '张：', shape.handSummary(this.hand));
+    this.log('对局开始，手牌', this.hand.length, '张：', shape.handSummary(this.hand));
   }
 
   onShowTopCard(d) {
     if (typeof d.dizhuPosId === 'number') this.dizhuPosId = d.dizhuPosId;
-    log('先手座位：', this.dizhuPosId);
+    this.log('先手座位：', this.dizhuPosId);
   }
 
   onCtxPlayChange(d) {
@@ -318,7 +316,7 @@ class AiBot {
     }
 
     const turn = d.posId;
-    dbg('轮转：轮到座', turn, '桌面', this.standingShape ? shape.shapeLabel(this.standingShape) : '无（自由首出）', 'tmpFeng', this.tmpFeng);
+    this.dbg('轮转：轮到座', turn, '桌面', this.standingShape ? shape.shapeLabel(this.standingShape) : '无（自由首出）', 'tmpFeng', this.tmpFeng);
 
     if (this.phase !== 'playing') return;
     if (turn === this.posId) {
@@ -338,7 +336,7 @@ class AiBot {
     try {
       decision = await this.decide(top);
     } catch (e) {
-      log('决策异常，改用兜底：', e.message);
+      this.log('决策异常，改用兜底：', e.message);
     }
 
     // 决策期间对局可能已结束（逃跑/终局）或状态被重置，此时不再出牌。
@@ -355,9 +353,9 @@ class AiBot {
     if (chat && this.cfg.bot.chat && this.cfg.bot.chat.onOwnTurn) this.sendChat(chat);
     this.lastSent = cards.length ? cards.slice() : null;
     if (cards.length) {
-      dbg('出牌：', cards.map(shape.cardLabel).join(' '));
+      this.dbg('出牌：', cards.map(shape.cardLabel).join(' '));
     } else {
-      dbg('过牌');
+      this.dbg('过牌');
     }
     this.sock.emit('PLAY_CARD', cards);
     this.busy = false;
@@ -372,16 +370,16 @@ class AiBot {
       if (res.action === 'pass') return { action: 'pass', cards: [], chat };
       const concrete = this.concretize(res.cards);
       if (!concrete.ok) {
-        log('LLM 出牌不合法或手牌不足，改用兜底；LLM 返回：', JSON.stringify(res.cards));
+        this.log('LLM 出牌不合法或手牌不足，改用兜底；LLM 返回：', JSON.stringify(res.cards));
         return null;
       }
       if (!shape.canBeat(concrete.cards, top)) {
-        log('LLM 出的牌压不过桌面，改用兜底；候选：', concrete.cards.map(shape.cardLabel).join(' '));
+        this.log('LLM 出的牌压不过桌面，改用兜底；候选：', concrete.cards.map(shape.cardLabel).join(' '));
         return null;
       }
       return { action: 'play', cards: concrete.cards, chat };
     } catch (e) {
-      log('LLM 决策失败，改用兜底：', e.message);
+      this.log('LLM 决策失败，改用兜底：', e.message);
       return null;
     }
   }
@@ -416,13 +414,13 @@ class AiBot {
   sendChat(text) {
     const msg = String(text || '').trim();
     if (!msg) return;
-    log('发言：', msg);
+    this.log('发言：', msg);
     this.sock.emit('USER_MESSAGE', msg);
     this.chatLog.push({ posId: this.posId, name: this.cfg.bot.name, msg });
   }
 
   onMessage(d) {
-    log('服务器提示：', d && d.msg);
+    this.log('服务器提示：', d && d.msg);
     // 开局请求被拒（未准备/空位/非主持人等）：重置标记，满足条件后由状态变化再次触发。
     if (this.phase === 'lobby') this.hostStarted = false;
   }
@@ -432,7 +430,7 @@ class AiBot {
     const name = d.posId < 0 ? '观战' : this.seatName(d.posId);
     this.chatLog.push({ posId: d.posId, name, msg: d.msg });
     if (d.type === 'USER' || d.type === 'SYS') {
-      dbg('聊天[' + (name || d.posId) + ']：', d.msg);
+      this.dbg('聊天[' + (name || d.posId) + ']：', d.msg);
     }
   }
 
@@ -544,7 +542,7 @@ class AiBot {
 
   onPlayCardError() {
     // 被拒（多为越序）：不删牌，等服务端重推的轮转帧对齐轮次。
-    log('出牌被拒（可能越序），已等待轮转帧重同步');
+    this.log('出牌被拒（可能越序），已等待轮转帧重同步');
     this.lastSent = null;
   }
 
@@ -566,7 +564,7 @@ class AiBot {
     this.busy = false;
     this.hostStarted = false;
     const myWin = Array.isArray(d.winner) && d.winner.indexOf(this.posId) !== -1;
-    log('对局结束：', myWin ? '本队获胜' : '本队落败', '比分', d.score, '我方席位', (d.winner || []).join(','));
+    this.log('对局结束：', myWin ? '本队获胜' : '本队落败', '比分', d.score, '我方席位', (d.winner || []).join(','));
     this.hand = [];
     this.standingShape = null;
     this.standingPos = null;
@@ -575,7 +573,7 @@ class AiBot {
       // 终局后座位自动回到未准备态（state=1），重新准备等待下一局。
       setTimeout(() => {
         if (this.stopping) return;
-        log('重新准备，等待下一局……');
+        this.log('重新准备，等待下一局……');
         this.phase = 'lobby';
         this.sock.emit('PREPARE');
       }, 2000);
@@ -585,7 +583,7 @@ class AiBot {
   onDisconnected() {
     if (this.stopping) return;
     if (!this.cfg.bot.reconnect || !this.cfg.bot.reconnect.enabled) {
-      log('连接断开，未启用自动重连，退出');
+      this.log('连接断开，未启用自动重连，退出');
       process.exit(1);
       return;
     }
@@ -598,7 +596,7 @@ class AiBot {
     }
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     const delay = Math.min(1000 * Math.pow(2, this.retry++), this.cfg.bot.reconnect.maxDelayMs || 10000);
-    log('连接断开，', delay + 'ms 后重连……');
+    this.log('连接断开，', delay + 'ms 后重连……');
     this.reconnectTimer = setTimeout(() => {
       this.attachSocket();
       this.connect();
@@ -606,5 +604,10 @@ class AiBot {
   }
 }
 
-const bot = new AiBot(cfg);
-bot.start();
+const configs = loadConfigs();
+if (!configs.length) {
+  console.error('[ai-bot] 没有可启动的 bot 配置');
+  process.exit(1);
+}
+console.log('[ai-bot] 共启动 ' + configs.length + ' 个 AI bot：' + configs.map((c) => c.bot.name).join('、'));
+configs.forEach((cfg) => new AiBot(cfg).start());

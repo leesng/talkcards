@@ -1,6 +1,9 @@
 // ai-config.example.json —— 复制为 ai-config.json 后按需修改。
-// 所有字段均可被环境变量覆盖：
-//   TALKCARDS_WS_URL / OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL / TALKCARDS_BOT_NAME
+// 多 bot 模式：顶层 "bots":[{...},...] 数组，每项配置一个 bot（名字/座位/主持/聊天等），
+// server / llm 为所有 bot 共享。每项可只写要覆盖的字段（其余沿用内置默认值）。
+// 环境变量覆盖（对所有 bot 生效）：
+//   TALKCARDS_WS_URL / OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL
+// 单 bot 时（无 bots 数组）可用旧式顶层 "bot" 字段，并支持 TALKCARDS_BOT_NAME / TALKCARDS_JOIN_MODE 等覆盖。
 {
   "server": {
     "url": "ws://127.0.0.1:8000/ws"
@@ -13,15 +16,24 @@
     "temperature": 0.2,
     "jsonMode": true
   },
-  "bot": {
-    "name": "AI阿花",
-    "join": { "mode": "fixed", "deskId": 1, "posId": 3 },
-    "autoPrepare": true,
-    "host": { "autoStart": true, "fillBots": false },
-    "chat": { "onOwnTurn": true, "onOthersTurn": false, "minIntervalMs": 5000 },
-    "decideTimeoutMs": 30000,
-    "reconnect": { "enabled": true, "maxDelayMs": 10000 },
-    "keepPlaying": true,
-    "verbose": false
-  }
+  "bots": [
+    {
+      "name": "AI阿花",
+      "join": { "mode": "fixed", "deskId": 1, "posId": 0 },
+      "autoPrepare": true,
+      "host": { "autoStart": true, "fillBots": true },
+      "chat": { "onOwnTurn": true, "onOthersTurn": false, "minIntervalMs": 5000 },
+      "decideTimeoutMs": 30000,
+      "reconnect": { "enabled": true, "maxDelayMs": 10000 },
+      "keepPlaying": true,
+      "verbose": false
+    },
+    {
+      "name": "AI阿强",
+      "join": { "mode": "fixed", "deskId": 1, "posId": 2 },
+      "host": { "autoStart": false, "fillBots": false },
+      "chat": { "onOwnTurn": true, "onOthersTurn": true, "minIntervalMs": 8000 },
+      "verbose": false
+    }
+  ]
 }

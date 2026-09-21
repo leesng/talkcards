@@ -31,6 +31,7 @@
 copy ai-bot\ai-config.example.json ai-bot\ai-config.json
 
 # 2) 编辑 ai-config.json：填 LLM 的 baseUrl/apiKey/model，以及服务器 url、机器人名、座位
+#    （多 bot 用顶层 "bots":[ {...}, {...} ] 数组，每项一个机器人，详见 §4）
 # 3) 运行（确认服务器已启动，默认 ws://127.0.0.1:8000/ws）
 node ai-bot\ai-bot.js
 ```
@@ -43,37 +44,68 @@ node ai-bot\ai-bot.js
 | `OPENAI_BASE_URL` | `llm.baseUrl` |
 | `OPENAI_API_KEY` | `llm.apiKey` |
 | `OPENAI_MODEL` | `llm.model` |
-| `TALKCARDS_BOT_NAME` | `bot.name` |
-| `TALKCARDS_JOIN_MODE` | `bot.join.mode`（`fixed` / `quickJoin`） |
-| `TALKCARDS_DESK_ID` | `bot.join.deskId` |
-| `TALKCARDS_POS_ID` | `bot.join.posId` |
-| `TALKCARDS_HOST_AUTOSTART` | `bot.host.autoStart`（`1`/`0`） |
-| `TALKCARDS_HOST_FILLBOTS` | `bot.host.fillBots`（`1`/`0`） |
+| `TALKCARDS_BOT_NAME` | `bot.name`（仅单 bot 模式） |
+| `TALKCARDS_JOIN_MODE` | `bot.join.mode`（仅单 bot 模式） |
+| `TALKCARDS_DESK_ID` | `bot.join.deskId`（仅单 bot 模式） |
+| `TALKCARDS_POS_ID` | `bot.join.posId`（仅单 bot 模式） |
+| `TALKCARDS_HOST_AUTOSTART` | `bot.host.autoStart`（仅单 bot 模式） |
+| `TALKCARDS_HOST_FILLBOTS` | `bot.host.fillBots`（仅单 bot 模式） |
 
 无 apiKey 时机器人仍可运行：出牌走**规则兜底**（确定性策略）、不主动发言。适合无 LLM 的规则回归测试。
 
 ## 4. 配置项说明（`ai-config.json`）
 
+**多 bot 模式**（推荐）：顶层 `bots` 为数组，每项一个机器人；`server` / `llm` 为所有 bot 共享。每项只写要覆盖的字段即可，其余沿用内置默认值：
+
 ```jsonc
 {
   "server": { "url": "ws://127.0.0.1:8000/ws" },       // http/https 自动转 ws/wss 并补 /ws
   "llm": {
-    "baseUrl": "https://api.openai.com/v1",            // OpenAI 兼容 baseURL
-    "apiKey": "",                                      // 不落地日志
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "",
     "model": "gpt-4o-mini",
-    "timeoutMs": 30000,                                 // 单次 LLM 请求超时
+    "timeoutMs": 30000,
     "temperature": 0.2,
-    "jsonMode": true                                    // 请求 response_format=json_object；部分网关不支持可置 false
+    "jsonMode": true
   },
+  "bots": [
+    { "name": "AI阿花", "join": { "mode": "fixed", "deskId": 1, "posId": 0 }, "host": { "autoStart": true, "fillBots": true }, "verbose": true },
+    { "name": "AI阿强", "join": { "mode": "fixed", "deskId": 1, "posId": 2 } }
+  ]
+}
+```
+
+`bots[i]` 的字段（均为可选，缺省用默认值，见下）：
+
+| 字段 | 默认 / 说明 |
+|---|---|
+| `name` | 机器人用户名（须全局唯一、非空、≤10 字） |
+| `join.mode` | `"fixed"`（指定桌号座位）\| `"quickJoin"`（自动找空位） |
+| `join.deskId` / `join.posId` | `mode:"fixed"` 时的桌号（1-20）与座位（0-7） |
+| `autoPrepare` | `true`：入座后自动 PREPARE |
+| `host.autoStart` / `host.fillBots` | 自己是主持人时的开局策略 |
+| `chat.onOwnTurn` / `chat.onOthersTurn` / `chat.minIntervalMs` | 发言时机与节流 |
+| `decideTimeoutMs` | 决策兜底（实际由 llm.timeoutMs 控制） |
+| `reconnect.{enabled,maxDelayMs}` | 断线重连（§9，暂缓） |
+| `keepPlaying` | `true`：终局后自动重新准备等下一局 |
+| `verbose` | `true`：打印调试日志（多 bot 时日志带 `[ai-bot:名字]` 前缀） |
+
+**单 bot（向后兼容）**：无 `bots` 数组时，沿用旧式顶层 `bot` 字段：
+
+```jsonc
+{
+  "server": { "url": "ws://127.0.0.1:8000/ws" },
+  "llm": { "baseUrl": "https://api.openai.com/v1", "apiKey": "", "model": "gpt-4o-mini",
+           "timeoutMs": 30000, "temperature": 0.2, "jsonMode": true },
   "bot": {
     "name": "AI阿花",
     "join": { "mode": "fixed", "deskId": 1, "posId": 3 }, // mode: "fixed" | "quickJoin"
-    "autoPrepare": true,                                // 入座后自动 PREPARE
-    "host": { "autoStart": true, "fillBots": false },   // 机器人为主持人时的开局策略
+    "autoPrepare": true,
+    "host": { "autoStart": true, "fillBots": false },
     "chat": { "onOwnTurn": true, "onOthersTurn": false, "minIntervalMs": 5000 },
-    "decideTimeoutMs": 30000,                           // 决策兜底（实际由 llm.timeoutMs 控制）
-    "reconnect": { "enabled": true, "maxDelayMs": 10000 }, // 见 §9「断线重连（暂缓）」
-    "keepPlaying": true,                                // 终局后自动重新准备、等下一局
+    "decideTimeoutMs": 30000,
+    "reconnect": { "enabled": true, "maxDelayMs": 10000 },
+    "keepPlaying": true,
     "verbose": false
   }
 }
