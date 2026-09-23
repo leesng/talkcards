@@ -10,8 +10,45 @@ const FACE_NAMES = {
 
 const SUIT_SYMBOLS = { 0: '♥', 1: '♦', 2: '♠', 3: '♣' };
 
+// 点值名 -> 数值（在线问答焦点识别用，含中文名/缩写/大小写）。
+const VALUE_BY_NAME = {
+  '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
+  'j': 11, '杰克': 11, '11': 11,
+  'q': 12, '圈': 12, '12': 12,
+  'k': 13, '凯': 13, '13': 13,
+  'a': 14, '尖': 14, '14': 14,
+  '2': 15, '两': 15, '15': 15,
+  '小王': 16, '小joker': 16, '小丑': 16, '16': 16,
+  '大王': 17, '大joker': 17, '大鬼': 17, '17': 17,
+};
+
 function faceName(value) {
   return FACE_NAMES[value] || String(value);
+}
+
+// 从一句话里提取提到的点值（去重、升序）。支持 3-10 / JQKA / 小王大王 / “两条Q”“有没有K”。
+function parseValueMentions(text) {
+  if (typeof text !== 'string' || !text) return [];
+  const found = new Set();
+  const s = text.toLowerCase();
+  // 优先匹配多字名称（小王/大王）与“几条/几张/两条”后紧跟的单字名。
+  for (const key of ['小王', '大王']) {
+    if (s.includes(key)) found.add(VALUE_BY_NAME[key]);
+  }
+  // 中文量词 + 牌名：如 “两个Q”“三张8”“有条K”。
+  const quan = /[零一二两三四五六七八九十\d]+[张条个]\s*([3-9]|10|j|q|k|a|2)/g;
+  let m;
+  while ((m = quan.exec(s)) !== null) {
+    const v = VALUE_BY_NAME[m[1]];
+    if (v != null) found.add(v);
+  }
+  // 单字牌名顺带匹配（J/Q/K/A/2/3-10），不带量词也认。
+  const single = /(10|[3-9jqka2])/g;
+  while ((m = single.exec(s)) !== null) {
+    const v = VALUE_BY_NAME[m[1]];
+    if (v != null) found.add(v);
+  }
+  return Array.from(found).sort((a, b) => a - b);
 }
 
 function cardLabel(card) {
@@ -143,7 +180,9 @@ function shapeLabel(shape) {
 module.exports = {
   FACE_NAMES,
   SUIT_SYMBOLS,
+  VALUE_BY_NAME,
   faceName,
+  parseValueMentions,
   cardLabel,
   parseShape,
   shapeBeats,

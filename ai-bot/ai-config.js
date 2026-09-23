@@ -30,6 +30,22 @@ const DEFAULTS = {
     reconnect: { enabled: true, maxDelayMs: 10000 },
     keepPlaying: true, // 对局结束后自动重新准备、等待下一局
     verbose: false,
+    // 协同作战（盘面记忆 / 披露尺度 / 通用问答）
+    brain: {
+      handInference: 'estimate', // estimate(默认) 用公开信息+残牌估算 | full 读 GAME_START 全量手牌
+      coopDisclosure: 'auto',    // conservative(只说计划不说牌值) | open(报牌值) | auto(按态势切换)
+      openWhen: {
+        anyOppRemainLte: 6,      // 任一对手剩余手牌 ≤ N → 切 open
+        teamCapturedGte: 250,    // 本队已收分 ≥ N → 切 open
+        maxValueExhausted: true, // 2/王/A 全桌已见尽 → 切 open
+      },
+    },
+    qa: {
+      enabled: true,          // 是否参与队友问答/协同
+      minIntervalMs: 2000,    // 同一 bot 最短发言间隔
+      maxReplyPerMin: 6,      // 每分钟最大回复条数（防刷屏）
+      groupSilenceMs: 4000,   // 群发问题无人应答时，上一个队友兜底回复的等待时长
+    },
   },
 };
 
