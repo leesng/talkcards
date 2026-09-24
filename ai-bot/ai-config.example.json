@@ -23,7 +23,6 @@
       "autoPrepare": true,
       "host": { "autoStart": true, "fillBots": true },
       "chat": { "onOwnTurn": true, "onOthersTurn": false, "minIntervalMs": 5000 },
-      "decideTimeoutMs": 30000,
       "reconnect": { "enabled": true, "maxDelayMs": 10000 },
       "keepPlaying": true,
       "verbose": false,

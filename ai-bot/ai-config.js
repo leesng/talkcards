@@ -26,7 +26,6 @@ const DEFAULTS = {
     autoPrepare: true,
     host: { autoStart: true, fillBots: false },
     chat: { onOwnTurn: true, onOthersTurn: false, minIntervalMs: 5000 },
-    decideTimeoutMs: 30000,
     reconnect: { enabled: true, maxDelayMs: 10000 },
     keepPlaying: true, // 对局结束后自动重新准备、等待下一局
     verbose: false,

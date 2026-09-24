@@ -28,6 +28,7 @@ async function chatCompletion(cfg, messages, opts = {}) {
   const body = { model, messages, temperature };
   const jsonMode = opts.json != null ? opts.json : cfg.jsonMode !== false;
   if (jsonMode && opts.responseFormat !== false) body.response_format = { type: 'json_object' };
+  if (cfg.reasoningEffort) body.reasoning_effort = cfg.reasoningEffort;
   if (opts.maxTokens) body.max_tokens = opts.maxTokens;
   if (opts.body) Object.assign(body, opts.body);
 

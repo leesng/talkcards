@@ -94,7 +94,6 @@ node ai-bot\ai-bot.js
 | `autoPrepare` | `true`：入座后自动 PREPARE |
 | `host.autoStart` / `host.fillBots` | 自己是主持人时的开局策略 |
 | `chat.onOwnTurn` / `chat.onOthersTurn` / `chat.minIntervalMs` | 发言时机与节流 |
-| `decideTimeoutMs` | 决策兜底（实际由 llm.timeoutMs 控制） |
 | `reconnect.{enabled,maxDelayMs}` | 断线重连（§9，暂缓） |
 | `keepPlaying` | `true`：终局后自动重新准备等下一局 |
 | `verbose` | `true`：打印调试日志（多 bot 时日志带 `[ai-bot:名字]` 前缀） |
@@ -118,7 +117,6 @@ node ai-bot\ai-bot.js
     "autoPrepare": true,
     "host": { "autoStart": true, "fillBots": false },
     "chat": { "onOwnTurn": true, "onOthersTurn": false, "minIntervalMs": 5000 },
-    "decideTimeoutMs": 30000,
     "reconnect": { "enabled": true, "maxDelayMs": 10000 },
     "keepPlaying": true,
     "verbose": false
