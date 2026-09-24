@@ -115,7 +115,7 @@ class Brain {
     const parts = [];
     const remainLines = [];
     for (let i = 0; i < SEATS; i++) {
-      if (this.remainCount[i] != null && i !== this.myPosId) remainLines.push(i + '号剩' + this.remainCount[i] + '张');
+      if (this.remainCount[i] != null && i !== this.myPosId) remainLines.push(shape.seatLabel(i) + '剩' + this.remainCount[i] + '张');
     }
     if (remainLines.length) parts.push('他人剩余张数：' + remainLines.join('，'));
 
@@ -126,7 +126,7 @@ class Brain {
       const opp = [];
       for (let i = 0; i < SEATS; i++) {
         if (i === this.myPosId || !this.opponentHands[i]) continue;
-        opp.push(i + '号残牌=' + this.valueCountSummary(this.opponentHands[i]));
+        opp.push(shape.seatLabel(i) + '残牌=' + this.valueCountSummary(this.opponentHands[i]));
       }
       if (opp.length) parts.push('他人精确残牌（full 推断）：' + opp.join('；'));
     }

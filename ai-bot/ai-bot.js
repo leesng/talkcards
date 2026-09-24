@@ -410,13 +410,22 @@ class AiBot {
   absorbAdvice(adviceFor) {
     if (!adviceFor || typeof adviceFor !== 'object') return;
     for (const [key, txt] of Object.entries(adviceFor)) {
-      const seat = Number(key);
+      const seat = this.resolveSeatKey(key);
       const t = String(txt || '').trim();
-      if (!Number.isInteger(seat) || !t) continue;
+      if (seat < 0 || !t) continue;
       if (seat === this.posId) continue; // 给自己？忽略
       this.plan.teammateAdvice[seat] = t;
       this.plan.version++;
     }
+  }
+
+  // 把 adviceFor 的键（座位编号 0-7 或桌位标签 A1-A4/B1-B4）解析为座位编号；无效返回 -1。
+  resolveSeatKey(key) {
+    if (typeof key === 'number' || /^\d+$/.test(String(key))) {
+      const n = Number(key);
+      return (Number.isInteger(n) && n >= 0 && n < 8) ? n : -1;
+    }
+    return shape.seatLabelToPosId(key);
   }
 
   async decide(top) {
@@ -580,10 +589,18 @@ class AiBot {
 
   mentionsMe(text) {
     if (text.includes(this.cfg.bot.name)) return true;
+    if (text.includes(shape.seatLabel(this.posId))) return true;
+    // 若点名到其它桌位标签（如 "A1号"），返回 false，避免其中数字被下面旧式匹配误命中。
+    for (let i = 0; i < 8; i++) {
+      if (i !== this.posId && text.includes(shape.seatLabel(i))) return false;
+    }
     return new RegExp('(^|[^0-9])' + this.posId + '\\s*[号座位]').test(text);
   }
 
   directedSeat(text) {
+    for (let i = 0; i < 8; i++) {
+      if (text.includes(shape.seatLabel(i))) return i;
+    }
     for (let i = 0; i < 8; i++) {
       if (new RegExp('(^|[^0-9])' + i + '\\s*[号座位]').test(text)) return i;
     }
@@ -823,22 +840,22 @@ class AiBot {
 
   generateAdvice(turn) {
     if (!this.standingShape) {
-      return turn + '号，没大牌就先出小牌，我帮你断后';
+      return shape.seatLabel(turn) + '，没大牌就先出小牌，我帮你断后';
     }
     if (!this.isTeammateSeat(this.standingPos)) {
       const b = this.brain.minimalBeater(this.hand, this.standingShape);
-      if (b) return turn + '号，这手让我来压';
+      if (b) return shape.seatLabel(turn) + '，这手让我来压';
     }
     return '';
   }
 
   async llmAdvise(turn) {
     const sys =
-      '你是《沟通牌》玩家 ' + this.cfg.bot.name + '。现在轮到你的队友 ' + turn + ' 号出牌。' +
+      '你是《沟通牌》玩家 ' + this.cfg.bot.name + '。现在轮到你的队友 ' + shape.seatLabel(turn) + ' 位出牌。' +
       '请基于盘面，给队友一句简短有用的建议（或约定分工、询问关键信息），只在确实有帮助时发言，否则务必输出空字符串。' +
       '公开聊天全桌可见（对手也看得到），' + (this.disclosureOpen() ? '可以报牌值。' : '不要泄露具体牌值。') +
       '只输出一个 JSON 对象：{"chat":"一句话或空字符串"}';
-    const user = this.stateBlock(this.standingShape) + '\n现在轮到队友 ' + turn + ' 号，请给建议。';
+    const user = this.stateBlock(this.standingShape) + '\n现在轮到队友 ' + shape.seatLabel(turn) + ' 位，请给建议。';
     const obj = await LLM.chatJSON(this.cfg.llm, [
       { role: 'system', content: sys },
       { role: 'user', content: user },
@@ -849,10 +866,11 @@ class AiBot {
   // ---- prompt 组装 ----
 
   systemPrompt() {
-    const team = this.posId % 2 === 0 ? '偶数队（座位 0/2/4/6）' : '奇数队（座位 1/3/5/7）';
+    const myLabel = shape.seatLabel(this.posId);
+    const team = this.posId % 2 === 0 ? 'A 队（座位 A1/A2/A3/A4）' : 'B 队（座位 B1/B2/B3/B4）';
     return [
-      '你是（多人扑克）沟通牌游戏里的一名真人玩家，名字叫 ' + this.cfg.bot.name + '，坐在第 ' + this.posId + '号座位（0-7）。',
-      '同奇偶座位是队友：偶数队 {0,2,4,6}，奇数队 {1,3,5,7}；你属于' + team + '。座位间隔落座，你的直接上下家是不同队伍（敌-友交替）。',
+      '你是（多人扑克）沟通牌游戏里的一名真人玩家，名字叫 ' + this.cfg.bot.name + '，坐在 ' + myLabel + ' 位。',
+      '座位按 A/B 两队在桌边间隔落座：A 队 {A1,A2,A3,A4}，B 队 {B1,B2,B3,B4}；你属于' + team + '。你的直接上下家是不同队伍（敌-友交替）。',
       '',
       '规则要点：',
       '- 牌值从小到大：3<4<5<6<7<8<9<10<J<Q<K<A<2<小王(16)<大王(17)。',
@@ -867,7 +885,7 @@ class AiBot {
       '- 依据当前手牌、桌面待压牌、双方已收分、盘面推断与公开聊天记录，制定合理策略（小牌优先、整组不拆、看情况用炸弹压分、与队友配合、必要时迷惑对手）。',
       '- 你只能在 hand 里已有的点值中选择；同点牌有多张时列表中的 type 可任意填 0-3，系统按点值自动取牌。',
       '- 输出的 decisions 必须是唯一的一个 JSON 对象，格式二选一（adviceFor 可缺省）：',
-      '  {"action":"play","cards":[{"value":13},{"value":13}],"chat":"给队友的一句话，可为空字符串","adviceFor":{"2":"给2号队友的建议，可缺省"}}',
+      '  {"action":"play","cards":[{"value":13},{"value":13}],"chat":"给队友的一句话，可为空字符串","adviceFor":{"A2":"给A2队友的建议，可缺省"}}',
       '  {"action":"pass","cards":[],"chat":"..."}',
       '- 选 play 时 cards 必须全部同一点值、张数合法（1-24）、且能压过桌面待压牌（自由首出时任意合法）；否则请选 pass。',
       '- chat 用简洁的中文，公开给全桌看，注意别泄露过多底牌、别过长；不需要时可填空字符串。',
@@ -887,13 +905,13 @@ class AiBot {
     lines.push('你的手牌（共 ' + this.hand.length + '张）：' + (shape.handSummary(this.hand) || '无'));
     if (top) {
       const rel = this.standingPos != null ? (this.standingPos % 2 === this.posId % 2 ? '队友' : '对手') : '某玩家';
-      lines.push('桌面待压牌：' + shape.shapeLabel(top) + '（最近有效出牌者为 ' + rel + ' ' + this.standingPos + ' 号）');
+      lines.push('桌面待压牌：' + shape.shapeLabel(top) + '（最近有效出牌者为 ' + rel + ' ' + shape.seatLabel(this.standingPos) + '）');
     } else {
       lines.push('桌面待压牌：无（你自由首出）');
     }
     lines.push('当前桌面滚动分 tmpFeng：' + this.tmpFeng);
     const sums = [];
-    for (let i = 0; i < 8; i++) sums.push(i + '号' + (Number(this.sumFeng[i]) || 0));
+    for (let i = 0; i < 8; i++) sums.push(shape.seatLabel(i) + (Number(this.sumFeng[i]) || 0));
     lines.push('各座位已收分：' + sums.join('，'));
     lines.push('本队已收分合计：' + this.teamCaptured(this.posId % 2) + '，对方合计：' + this.teamCaptured(1 - this.posId % 2));
 
@@ -927,14 +945,14 @@ class AiBot {
   teammateClaimsBlock() {
     const arr = [];
     for (let i = 0; i < 8; i++) {
-      if (this.teammateClaims[i]) arr.push(i + '号：' + this.teammateClaims[i].text);
+      if (this.teammateClaims[i]) arr.push(shape.seatLabel(i) + '：' + this.teammateClaims[i].text);
     }
     return arr.join('；');
   }
 
   chatBlock() {
     if (!this.chatLog.length) return '';
-    return this.chatLog.slice(-16).map((m) => (m.name || ('座位' + m.posId)) + '：' + m.msg).join('\n');
+    return this.chatLog.slice(-16).map((m) => (m.name || shape.seatLabel(m.posId)) + '：' + m.msg).join('\n');
   }
 
   teamCaptured(parity) {
@@ -945,7 +963,7 @@ class AiBot {
 
   seatName(posId) {
     if (this.seats[posId] && this.seats[posId].userName) return this.seats[posId].userName;
-    return '座位' + posId;
+    return shape.seatLabel(posId);
   }
 
   // ---- 出牌结果 ----

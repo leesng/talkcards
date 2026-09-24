@@ -26,11 +26,25 @@ function faceName(value) {
   return FACE_NAMES[value] || String(value);
 }
 
+// 座位编号 → 桌位标签（与前端 index.html seatLabel 及 style.css A1-A4/B1-B4 一致）。
+function seatLabel(posId) {
+  return posId % 2 === 0 ? 'A' + (posId / 2 + 1) : 'B' + ((posId + 1) / 2);
+}
+
+// 桌位标签（A1-A4/B1-B4，大小写不敏感）→ 座位编号；无效返回 -1。
+function seatLabelToPosId(label) {
+  const m = /^([abAB])([1-4])$/.exec(String(label == null ? '' : label).trim());
+  if (!m) return -1;
+  const team = /[aA]/.test(m[1]) ? 0 : 1;
+  return (Number(m[2]) - 1) * 2 + team;
+}
+
 // 从一句话里提取提到的点值（去重、升序）。支持 3-10 / JQKA / 小王大王 / “两条Q”“有没有K”。
 function parseValueMentions(text) {
   if (typeof text !== 'string' || !text) return [];
   const found = new Set();
-  const s = text.toLowerCase();
+  // 先剥掉桌位标签 A1-A4 / B1-B4，避免其中的 "A"/"2"/"3"/"4" 被误当作牌点值。
+  const s = text.toLowerCase().replace(/[ab][1-4]/g, '');
   // 优先匹配多字名称（小王/大王）与“几条/几张/两条”后紧跟的单字名。
   for (const key of ['小王', '大王']) {
     if (s.includes(key)) found.add(VALUE_BY_NAME[key]);
@@ -182,6 +196,8 @@ module.exports = {
   SUIT_SYMBOLS,
   VALUE_BY_NAME,
   faceName,
+  seatLabel,
+  seatLabelToPosId,
   parseValueMentions,
   cardLabel,
   parseShape,
