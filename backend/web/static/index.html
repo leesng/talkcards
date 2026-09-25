@@ -131,7 +131,7 @@
             <player-avatar :label="seatLabel(posIdByDirection(0))" :team="seatTeam(posIdByDirection(0))" :is-dizhu="posState.p0.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p0.name}}<span v-if="isHostPos(0)" class="host-tag">主持</span><span v-if="posState.p0.isBot" class="bot-tag">机器人</span><span v-if="posState.p0.trustee" class="trustee-tag">托管</span></div>
             <div class="text-center player-status" v-if="posState.p0.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
-            <div class="seat-hud" v-if="roomState.state < 3">
+            <div class="seat-hud seat-hud-below" v-if="roomState.state < 3">
               <div class="hud-row"><span class="hud-label">剩余</span><span class="hud-count" :class="{'low-count': roomState.state === 2 && posState.p0.cards.length <= 10}">{{posState.p0.cards.length}}</span><span class="hud-unit">张</span></div>
               <div class="hud-row"><span class="hud-label">得分</span><span class="tip-score" :class="{ 'tip-score-live': posState.p0.sumFeng > 0 }">{{posState.p0.sumFeng}}分</span></div>
             </div>
@@ -191,7 +191,7 @@
             <player-avatar :label="seatLabel(posIdByDirection(6))" :team="seatTeam(posIdByDirection(6))" :is-dizhu="posState.p6.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p6.name}}<span v-if="isHostPos(6)" class="host-tag">主持</span><span v-if="posState.p6.isBot" class="bot-tag">机器人</span><span v-if="posState.p6.trustee" class="trustee-tag">托管</span></div>
             <div class="text-center player-status" v-if="posState.p6.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
-            <div class="seat-hud" v-if="roomState.state < 3">
+            <div class="seat-hud seat-hud-below" v-if="roomState.state < 3">
               <div class="hud-row"><span class="hud-label">剩余</span><span class="hud-count" :class="{'low-count': roomState.state === 2 && posState.p6.cards.length <= 10}">{{posState.p6.cards.length}}</span><span class="hud-unit">张</span></div>
               <div class="hud-row"><span class="hud-label">得分</span><span class="tip-score" :class="{ 'tip-score-live': posState.p6.sumFeng > 0 }">{{posState.p6.sumFeng}}分</span></div>
             </div>
@@ -203,7 +203,7 @@
             <player-avatar :label="seatLabel(posIdByDirection(7))" :team="seatTeam(posIdByDirection(7))" :is-dizhu="posState.p7.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p7.name}}<span v-if="isHostPos(7)" class="host-tag">主持</span><span v-if="posState.p7.isBot" class="bot-tag">机器人</span><span v-if="posState.p7.trustee" class="trustee-tag">托管</span></div>
             <div class="text-center player-status" v-if="posState.p7.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
-            <div class="seat-hud" v-if="roomState.state < 3">
+            <div class="seat-hud seat-hud-below" v-if="roomState.state < 3">
               <div class="hud-row"><span class="hud-label">剩余</span><span class="hud-count" :class="{'low-count': roomState.state === 2 && posState.p7.cards.length <= 10}">{{posState.p7.cards.length}}</span><span class="hud-unit">张</span></div>
               <div class="hud-row"><span class="hud-label">得分</span><span class="tip-score" :class="{ 'tip-score-live': posState.p7.sumFeng > 0 }">{{posState.p7.sumFeng}}分</span></div>
             </div>
@@ -215,6 +215,9 @@
             <player-avatar :label="seatLabel(posIdByDirection(3))" :team="seatTeam(posIdByDirection(3))" :is-dizhu="posState.p3.isDizhu"></player-avatar>
             <div class="player-name text-center">{{posState.p3.name}}<span v-if="isHostPos(3)" class="host-tag">主持</span><span v-if="posState.p3.isBot" class="bot-tag">机器人</span><span v-if="posState.p3.trustee" class="trustee-tag">托管</span></div>
             <div class="text-center player-status" v-if="posState.p3.state === 2 && (roomState.state === 0 || roomState.state === 3)">已准备</div>
+            <div class="seat-hud seat-hud-below seat-hud-one-line" v-if="roomState.state < 3">
+              <div class="hud-row"><span class="hud-label">剩余</span><span class="hud-count" :class="{'low-count': roomState.state === 2 && posState.p3.cards.length <= 10}">{{posState.p3.cards.length}}</span><span class="hud-unit">张</span><span class="hud-label">得分</span><span class="tip-score" :class="{ 'tip-score-live': posState.p3.sumFeng > 0 }">{{posState.p3.sumFeng}}分</span></div>
+            </div>
           </div>
         </div>
       </div>
@@ -222,12 +225,11 @@
       <!-- 牌列表 -->
       <div class="card-groups" v-if="roomState.state">
         <!-- 自己的牌列表（观战时显示牌背，不可点选） -->
-        <div class="card-group card-group-p3" :style="{width:posState.p3.cards.length * 20 + 70 + 'px'}" v-if="!(roomState.state === 3 && posState.p3.state === 2)">
+        <div class="card-group card-group-p3" :style="{width:posState.p3.cards.length * 16 + 74 + 'px'}" v-if="!(roomState.state === 3 && posState.p3.state === 2)">
           <div v-if="!isSpectator" @dragstart="onDragstart($event)" draggable="true" @dragenter="onDragenter($event)"  @click="selectCard(card)" v-for="(card,index) in posState.p3.cards"
-            class="card" :class="'card-' + card.value + '-' + card.type" :style="{left:index * 20 + 'px',top:card.selected ? '-20px' : 0}">
+            class="card" :class="'card-' + card.value + '-' + card.type" :style="{left:index * 16 + 'px',top:card.selected ? '-20px' : 0}">
           </div>
-          <div v-if="isSpectator" v-for="(card,index) in posState.p3.cards" class="card card-unknow" :style="{left:index * 20 + 'px'}"></div>
-          <div class="text-tips text-tips-left text-left" v-if="roomState.state < 3">剩余：<span :class="{'low-count': roomState.state === 2 && posState.p3.cards.length <= 10}">{{posState.p3.cards.length}}</span>张 <span class="tip-score" :class="{ 'tip-score-live': posState.p3.sumFeng > 0 }">{{posState.p3.sumFeng}}分</span></div>
+          <div v-if="isSpectator" v-for="(card,index) in posState.p3.cards" class="card card-unknow" :style="{left:index * 16 + 'px'}"></div>
         </div>
         <!-- p0牌列表 -->
         <div class="card-group card-group-p0" :style="{width:posState.p0.cards.length * 2 + 88 + 'px'}">

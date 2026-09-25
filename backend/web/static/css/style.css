@@ -358,14 +358,14 @@ button:active { transform: translateY(0); filter: brightness(.95); }
     inset 0 -10px 24px rgba(0, 0, 0, 0.34);
 }
 
-/* 记分区：本方:对方 单行比分 + 待收分（精简版，移到右上角，让桌心只留给出牌） */
+/* 记分区：本方:对方 单行比分 + 待收分（精简版，顶到左上角，让桌心只留给出牌） */
 .feng-system {
   position: fixed;
-  top: var(--room-pad);
-  right: var(--room-pad);
+  top: calc(var(--table-edge) + 4px);
+  left: var(--room-pad);
   z-index: 999;
-  padding: 6px 12px;
-  border-radius: 20px;
+  padding: 4px 8px;
+  border-radius: 18px;
   background: linear-gradient(180deg, rgba(14, 34, 25, 0.9), rgba(7, 19, 14, 0.94));
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -374,15 +374,15 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 .score-board {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   line-height: 1;
 }
 .score-tag {
   flex: none;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  line-height: 20px;
-  padding: 0 8px;
+  line-height: 18px;
+  padding: 0 6px;
   border-radius: 6px;
   letter-spacing: 1px;
 }
@@ -396,9 +396,9 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 }
 .score-num {
   flex: none;
-  min-width: 30px;
+  min-width: 22px;
   text-align: center;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 800;
   line-height: 1;
   color: #fff;
@@ -410,7 +410,7 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   text-shadow: 0 0 10px rgba(240, 192, 90, 0.55);
 }
 .score-vs {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.5);
 }
@@ -420,12 +420,12 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   display: inline-flex;
   flex-direction: column;
   align-items: center;
-  min-width: 42px;
+  min-width: 30px;
   line-height: 1;
 }
 .score-grab {
   margin-top: 2px;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.55);
   white-space: nowrap;
@@ -434,16 +434,16 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 .score-pot {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin-left: 6px;
-  padding: 2px 8px;
+  gap: 3px;
+  margin-left: 4px;
+  padding: 2px 6px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.08);
-  font-size: 11px;
+  font-size: 10px;
   color: rgba(255, 255, 255, 0.6);
 }
 .score-pot-num {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 800;
   line-height: 1;
   color: #fff;
@@ -480,7 +480,7 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 /* 出牌按钮组 */
 .btn-group {
   position: absolute;
-  bottom: calc(228px + var(--room-pad));
+  bottom: calc(116px + var(--room-pad));
   text-align: center;
   width: 100%;
   left: 0;
@@ -528,7 +528,7 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 .text-tips {
   color: rgba(255, 255, 255, 0.9);
   position: absolute;
-  bottom: -25px;
+  bottom: -16px;
   font-size: 13px;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
@@ -563,13 +563,15 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 /* 左右两侧座位（p1/p2/p4/p5）复用同一块面板，只换挂点：
    两侧头像的"旁边"就是手牌列（牌列垂直居中于头像，占满内侧），没有上排那种空位，
    所以面板挂在头像正下方，并左右居中于头像（与昵称同一条竖轴）。 */
-.seat-hud-below { top: calc(100% + 6px); left: 50%; right: auto; transform: translateX(-50%); }
+.seat-hud-below { top: calc(100% - 14px); left: 50%; right: auto; transform: translateX(-50%); }
 .hud-row { display: flex; align-items: center; gap: 5px; line-height: 1.35; }
 .hud-row + .hud-row { margin-top: 4px; }
 .hud-label { flex: none; font-size: 11px; letter-spacing: 1px; color: rgba(255, 255, 255, 0.55); }
 .hud-count { font-size: 16px; font-weight: 800; }
 .hud-unit { font-size: 11px; color: rgba(255, 255, 255, 0.55); margin-left: -2px; }
 .seat-hud .tip-score { margin-left: auto; margin-top: 0; padding: 1px 8px; font-size: 12px; }
+/* 主视角：剩余/得分单行显示，去掉自动右对齐 */
+.seat-hud-one-line .tip-score { margin-left: 6px; }
 /* 个人得分徽标：头像旁“X分”，有得分时金色点亮突出 */
 .tip-score {
   display: inline-block;
@@ -634,40 +636,39 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 .card-group { position: fixed; height: 120px; width: 50%; }
 
 .card-group-p3 {
-  bottom: calc(78px + var(--room-pad));
+  bottom: calc(14px + var(--room-pad));
   left: 50%;
   z-index: 999;
-  transform: translateX(-50%);
+  /* 主视角手牌同步缩小：与对手手牌(2/3)观感拉近，贴到桌沿下方、矮屏上不会压到左右下位玩家 */
+  transform: translateX(-50%) scale(0.8);
+  transform-origin: center bottom;
   transition: width 0.2s;
 }
 .card-group-p3 .card { cursor: pointer; }
 
-/* 牌列跟随座位：上排 3 个在头像正下方（1/3、1/2、2/3 宽度），
-   左右两侧在头像内侧、2/5 与 3/5 高度（同样只动侧排，上排不变）。
-   非本玩家的牌整体缩到 2/3（transform 不占布局，锚点基准不变）：
-   上排以"上中"为缩放原点保持水平居中；两侧贴头像一侧缩放（左排贴左、右排贴右），
-   margin-top 从 -60 调为 -40 让 80px 的视觉高度重新对齐头像中线；
-   上排牌列下移到 110px 基准线避开头像下方的昵称（视觉高 80px，底缘 190 < 出牌区 198） */
-.card-group-p0 { top: calc(110px + var(--room-pad)); left: 33.333%; transform: translateX(-50%) scale(2/3); transform-origin: top center; }
-.card-group-p1 { top: 40%; left: calc(102px + var(--room-pad)); margin-top: -40px; transform: scale(2/3); transform-origin: top left; }
-.card-group-p2 { top: 60%; left: calc(102px + var(--room-pad)); margin-top: -40px; transform: scale(2/3); transform-origin: top left; }
-.card-group-p4 { top: 60%; right: calc(102px + var(--room-pad)); margin-top: -40px; transform: scale(2/3); transform-origin: top right; }
-.card-group-p5 { top: 40%; right: calc(102px + var(--room-pad)); margin-top: -40px; transform: scale(2/3); transform-origin: top right; }
-.card-group-p6 { top: calc(110px + var(--room-pad)); left: 66.666%; transform: translateX(-50%) scale(2/3); transform-origin: top center; }
-.card-group-p7 { top: calc(110px + var(--room-pad)); left: 50%; transform: translateX(-50%) scale(2/3); transform-origin: top center; }
+/* 牌堆跟随座位：上排 3 家采用「信息列(头像/名字/剩余得分)在左、牌堆在右」的横向两列布局，
+    左右两侧仍是头像靠外、牌堆靠内。非本玩家的牌堆统一缩到 0.5（更紧凑的"牌堆"观感），
+    上排牌堆挂在头像右下侧、左右两侧贴头像侧缩放（左排贴左、右排贴右）。 */
+.card-group-p0 { top: calc(var(--table-edge) - 4px); left: calc(26% + 60px); transform: scale(0.8); transform-origin: top left; }
+.card-group-p1 { top: 46%; left: calc(102px + var(--room-pad)); margin-top: -48px; transform: scale(0.8); transform-origin: top left; }
+.card-group-p2 { top: 65%; left: calc(102px + var(--room-pad)); margin-top: -48px; transform: scale(0.8); transform-origin: top left; }
+.card-group-p4 { top: 65%; right: calc(102px + var(--room-pad)); margin-top: -48px; transform: scale(0.8); transform-origin: top right; }
+.card-group-p5 { top: 46%; right: calc(102px + var(--room-pad)); margin-top: -48px; transform: scale(0.8); transform-origin: top right; }
+.card-group-p6 { top: calc(var(--table-edge) - 4px); left: calc(74% + 60px); transform: scale(0.8); transform-origin: top left; }
+.card-group-p7 { top: calc(var(--table-edge) - 4px); left: calc(50% + 60px); transform: scale(0.8); transform-origin: top left; }
 
 .card-ctx { position: absolute; height: 120px; }
 .card-ctx .card { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
-.card-ctx-p3 { bottom: calc(278px + var(--room-pad)); left: 50%; z-index: 999; transform: translateX(-50%); }
-/* 出牌区"朝桌心"放置：上排在各自牌列下方，左右两侧内移到 278px 基准线、
-   与座位同高度（1/3、2/3） */
-.card-ctx-p0 { top: calc(198px + var(--room-pad)); left: 33.333%; transform: translateX(-50%); }
-.card-ctx-p1 { top: 40%; left: calc(278px + var(--room-pad)); margin-top: -60px; }
-.card-ctx-p2 { top: 60%; left: calc(278px + var(--room-pad)); margin-top: -60px; }
-.card-ctx-p4 { top: 60%; right: calc(278px + var(--room-pad)); margin-top: -60px; }
-.card-ctx-p5 { top: 40%; right: calc(278px + var(--room-pad)); margin-top: -60px; }
-.card-ctx-p6 { top: calc(198px + var(--room-pad)); left: 66.666%; transform: translateX(-50%); }
-.card-ctx-p7 { top: calc(198px + var(--room-pad)); left: 50%; z-index: 999; transform: translateX(-50%); }
+.card-ctx-p3 { bottom: calc(120px + var(--room-pad)); left: 50%; z-index: 999; transform: translateX(-50%) scale(0.8); }
+/* 出牌区"朝桌心"放置：上排在各自信息列下方，左右两侧内移到 278px 基准线、
+   与座位同高度（1/3、2/3）；所有打出牌与手牌统一 scale(0.8) 等大 */
+.card-ctx-p0 { top: calc(96px + var(--room-pad)); left: 26%; transform: translateX(-50%) scale(0.8); }
+.card-ctx-p1 { top: 46%; left: calc(278px + var(--room-pad)); margin-top: -60px; transform: scale(0.8); }
+.card-ctx-p2 { top: 65%; left: calc(278px + var(--room-pad)); margin-top: -60px; transform: scale(0.8); }
+.card-ctx-p4 { top: 65%; right: calc(278px + var(--room-pad)); margin-top: -60px; transform: scale(0.8); }
+.card-ctx-p5 { top: 46%; right: calc(278px + var(--room-pad)); margin-top: -60px; transform: scale(0.8); }
+.card-ctx-p6 { top: calc(96px + var(--room-pad)); left: 74%; transform: translateX(-50%) scale(0.8); }
+.card-ctx-p7 { top: calc(96px + var(--room-pad)); left: 50%; z-index: 999; transform: translateX(-50%) scale(0.8); }
 
 /* 牌面精灵定位（保持原始坐标，勿动） */
 .card-14-0 { background-position: 0 0; }
@@ -750,22 +751,22 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 }
 
 .player-wrapper {
-  height: 100px;
-  width: 100px;
+  height: 86px;
+  width: 86px;
   color: #fff;
   position: absolute;
 }
 
 .player-photo {
   width: 100%;
-  height: 64px;
+  height: 52px;
   background-image: url('../images/qq.png');
   background-repeat: no-repeat;
   background-position: center;
   /* 统一头像渲染高度：qq.png(60×43) 与 qq-king.png(60×56) 原始高度不同，
      居中渲染会让国王皮肤整体下移、序号徽标(bottom:12.5%)相对头像错位；
-     统一按 43px 高渲染，两类头像底边/徽标对齐完全一致 */
-  background-size: auto 43px;
+     统一按 34px 高渲染，两类头像底边/徽标对齐完全一致 */
+  background-size: auto 34px;
 }
 .player-photo-king { background-image: url('../images/qq-king.png') !important; }
 
@@ -788,15 +789,16 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 /* 座位环（出牌顺序 p3→p4→p5→p6→p7→p0→p1→p2 绕桌一圈）：
    下中=自己 p3（4/5 高度）；左右两侧各 2 个座位在 2/5、3/5 高度；上排 3 个在 1/3、1/2、2/3 宽度。
    内缩到绒布边缘以内（--room-pad = 桌沿 + 间距），桌沿加厚时自动跟着走 */
-/* 自己（p3）头像：相对定位，水平放在牌桌左侧 1/8 处（原来在正下方会与手牌区互相遮挡），纵向比其他座位的 4/5 锚点略低一点 */
-.player-wrapper.player-p3 { top: 88%; margin-top: -50px; left: 12.5%; margin-left: -50px; }
-.player-wrapper.player-p4 { right: var(--room-pad); top: 60%; margin-top: -50px; }
-.player-wrapper.player-p5 { right: var(--room-pad); top: 40%; margin-top: -50px; }
-.player-wrapper.player-p6 { top: var(--room-pad); left: 66.666%; margin-left: -50px; }
-.player-wrapper.player-p7 { top: var(--room-pad); left: 50%; margin-left: -50px; }
-.player-wrapper.player-p0 { top: var(--room-pad); left: 33.333%; margin-left: -50px; }
-.player-wrapper.player-p1 { left: var(--room-pad); top: 40%; margin-top: -50px; }
-.player-wrapper.player-p2 { left: var(--room-pad); top: 60%; margin-top: -50px; }
+/* 上下排贴边、两侧贴边：上排三家(p0/p7/p6)往上顶到桌沿，下排主视角(p3)往下沉到底边，
+    中间让给手牌列与出牌区，既消除头像/信息面板与出牌的相互遮挡，又"上下尽量靠边"。 */
+.player-wrapper.player-p3 { top: auto; bottom: calc(var(--table-edge) + 36px); margin-top: 0; left: 12.5%; margin-left: -43px; }
+.player-wrapper.player-p4 { right: var(--room-pad); top: 65%; margin-top: -43px; }
+.player-wrapper.player-p5 { right: var(--room-pad); top: 46%; margin-top: -43px; }
+.player-wrapper.player-p6 { top: calc(var(--table-edge) - 4px); left: 74%; margin-left: -43px; }
+.player-wrapper.player-p7 { top: calc(var(--table-edge) - 4px); left: 50%; margin-left: -43px; }
+.player-wrapper.player-p0 { top: calc(var(--table-edge) - 4px); left: 26%; margin-left: -43px; }
+.player-wrapper.player-p1 { left: var(--room-pad); top: 46%; margin-top: -43px; }
+.player-wrapper.player-p2 { left: var(--room-pad); top: 65%; margin-top: -43px; }
 
 /* 当前行动玩家高亮 */
 .player-wrapper.active-turn .player-name {
