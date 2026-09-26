@@ -573,18 +573,12 @@ class AiBot {
     // 任何同伴新发言都视为可能已响应进行中的群发问题（兜底据此闭嘴）。
     if (this.pendingGroup && this.pendingGroup.fp !== fp) this.pendingGroup.answered = true;
 
-    // 1) 报牌/汇报：记录进 teammateClaims，无需他人作答。
-    const report = this.parseHandReport(text);
-    if (report.isReport) {
-      this.teammateClaims[posId] = { text, values: report.values, ts: Date.now() };
-      return;
-    }
-
     const isQ = this.isQuestion(text);
     const toMe = this.mentionsMe(text);
     const toSeat = this.directedSeat(text);
     const directed = toMe ? this.posId : (toSeat >= 0 ? toSeat : -1);
 
+    // 1) 提问优先于“报牌”：否则“几个炸弹/王炸”会因含关键词被误当报牌吞掉、得不到回答。
     if (isQ) {
       if (directed === this.posId) {
         // 点名询问：必须回答（即便“没有/压不住”）。
@@ -597,7 +591,14 @@ class AiBot {
       return;
     }
 
-    // 2) 指令/约定（非问句）。
+    // 2) 报牌/汇报：记录进 teammateClaims，无需他人作答。
+    const report = this.parseHandReport(text);
+    if (report.isReport) {
+      this.teammateClaims[posId] = { text, values: report.values, ts: Date.now() };
+      return;
+    }
+
+    // 3) 指令/约定（非问句）。
     const assign = this.parseAssign(text);
     if (assign) {
       if (directed === this.posId) {
@@ -610,7 +611,7 @@ class AiBot {
       return;
     }
 
-    // 3) 寒暄/建议/其它：不进指令，不强制动作（prompt 会引用聊天记录）。
+    // 4) 寒暄/建议/其它：不进指令，不强制动作（prompt 会引用聊天记录）。
   }
 
   qhFingerprint(askerPosId, text) {
@@ -644,7 +645,7 @@ class AiBot {
 
   isQuestion(text) {
     return /[？?]/.test(text) ||
-      /谁|有没有|有吗|有没|能不能|能否|可以吗|几张|多少|还剩|还有几个|能压|能接|能顶|压得住|接得住|谁有|可压|接这|顶这/.test(text);
+      /谁|有没有|有吗|有没|能不能|能否|可以吗|几个|几张|多少|还剩|还有几个|能压|能接|能顶|压得住|接得住|谁有|可压|接这|顶这/.test(text);
   }
 
   parseHandReport(text) {
@@ -1016,7 +1017,7 @@ class AiBot {
       '- 主动在合适时机询问队友（谁有某牌、谁能压、还差多少分）、给出出牌建议、与队友约定分工（谁接风、谁压、谁留牌）。',
       '- 队友点你的名问话必须回答；群发问题有有用信息就如实简短回答（没有则沉默）。',
       '- 不执行会损害己方的指令（如无意义抢队友的收分/接风、无谓拆牌/炸牌）。',
-      '- 对队友如实报牌：公开聊天可直接报出具体牌值/张数（如“2有3张”“有2个炸弹”），不需对队友隐瞒；仍可给对手放烟雾弹。',
+      '- 对队友如实报牌：队友问你数量/有无时，只简短回答数字或“有/没有”（如“2个”“有”），绝不展开每种牌/每张牌，也不要用括号补细节；仍可给对手放烟雾弹。',
     ].join('\n');
   }
 
