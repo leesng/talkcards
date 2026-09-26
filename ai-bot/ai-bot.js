@@ -399,6 +399,12 @@ class AiBot {
       cards = decision.cards || [];
       chat = decision.chat || '';
       this.absorbAdvice(decision.adviceFor);
+      // 自由首出：不信任 LLM 的牌面选择，强制按“单张→对→三→炸弹、组内牌值升序”从小到大出，
+      // 杜绝一开局就丢炸弹/大牌；LLM 只负责 chat / adviceFor 建议。
+      if (!top) {
+        const lead = shape.findHintCards(this.hand, null);
+        if (lead && lead.length) cards = lead.slice();
+      }
     } else {
       const fb = this.fallbackMove(top);
       cards = fb.cards || [];
@@ -1000,6 +1006,7 @@ class AiBot {
       '  {"action":"play","cards":[{"value":13},{"value":13}],"chat":"给队友的一句话，可为空字符串","adviceFor":{"A2":"给A2队友的建议，可缺省"}}',
       '  {"action":"pass","cards":[],"chat":"..."}',
       '- 选 play 时 cards 必须全部同一点值、张数合法（1-24）、且能压过桌面待压牌（自由首出时任意合法）；否则请选 pass。',
+      '- 自由首出（桌面无待压牌）时只能出最小整组，顺序固定：单张→对→三→炸弹、同型内牌值从小到大、整组不拆；绝不一开始就丢炸弹/大牌（队友明确示意接风/冲线时除外）。',
       '- chat 仅在有实际信息量时输出，否则务必填空字符串：被点名提问要答、给队友下关键指令/分工、或判断出胜负/关键胜负手时即时提醒队友。',
       '- 出牌本身不要配陈述（如“我出对Q”“我过”这种废话一律不说）；除上面允许的情形外，普通一手牌 chat 一律留空。',
       '- 判断到胜负或关键胜负手时，务必在 chat 即时说明，并用 adviceFor 给对应队友下达指令（谁压、谁放行、谁接风）。',
