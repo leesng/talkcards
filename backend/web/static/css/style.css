@@ -637,9 +637,10 @@ button:active { transform: translateY(0); filter: brightness(.95); }
 
 .card-group-p3 {
   bottom: calc(14px + var(--room-pad));
-  left: 50%;
+  left: 52.5%;
   z-index: 999;
-  /* 主视角手牌同步缩小：与对手手牌(2/3)观感拉近，贴到桌沿下方、矮屏上不会压到左右下位玩家 */
+  /* 主视角手牌区：回到与整桌一致的 0.8 缩放，避免铺太宽压到左侧自己头像与右下托按钮；
+     整体略靠右，让出左下自己头像与右下托管按钮的位置 */
   transform: translateX(-50%) scale(0.8);
   transform-origin: center bottom;
   transition: width 0.2s;
@@ -1229,9 +1230,10 @@ button:active { transform: translateY(0); filter: brightness(.95); }
   z-index: 900;
 }
 
-/* 托管中座位标识：座位卡片叠加呼吸闪烁的"托管中"遮罩，告知其他玩家系统代打中 */
+/* 托管中座位标识：座位卡片叠加呼吸闪烁的"托管中"遮罩，告知其他玩家系统代打中。
+   注意：.player-wrapper 本身已是 position:absolute（定位上下文），这里不能再设 position:relative，
+   否则会覆盖 absolute 让座位脱离 bottom/left 锚点掉回文档流顶部。 */
 .player-wrapper.trustee-on {
-  position: relative;
 }
 
 .player-wrapper.trustee-on::after {

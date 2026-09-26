@@ -225,11 +225,11 @@
       <!-- 牌列表 -->
       <div class="card-groups" v-if="roomState.state">
         <!-- 自己的牌列表（观战时显示牌背，不可点选） -->
-        <div class="card-group card-group-p3" :style="{width:posState.p3.cards.length * 16 + 74 + 'px'}" v-if="!(roomState.state === 3 && posState.p3.state === 2)">
+        <div class="card-group card-group-p3" :style="{width:posState.p3.cards.length * 20 + 70 + 'px'}" v-if="!(roomState.state === 3 && posState.p3.state === 2)">
           <div v-if="!isSpectator" @dragstart="onDragstart($event)" draggable="true" @dragenter="onDragenter($event)"  @click="selectCard(card)" v-for="(card,index) in posState.p3.cards"
-            class="card" :class="'card-' + card.value + '-' + card.type" :style="{left:index * 16 + 'px',top:card.selected ? '-20px' : 0}">
+            class="card" :class="'card-' + card.value + '-' + card.type" :style="{left:index * 20 + 'px',top:card.selected ? '-20px' : 0}">
           </div>
-          <div v-if="isSpectator" v-for="(card,index) in posState.p3.cards" class="card card-unknow" :style="{left:index * 16 + 'px'}"></div>
+          <div v-if="isSpectator" v-for="(card,index) in posState.p3.cards" class="card card-unknow" :style="{left:index * 20 + 'px'}"></div>
         </div>
         <!-- p0牌列表 -->
         <div class="card-group card-group-p0" :style="{width:posState.p0.cards.length * 2 + 88 + 'px'}">

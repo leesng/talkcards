@@ -10,6 +10,13 @@ const LLM = require('./ai-LLM');
 const shape = require('./ai-shape');
 const { Brain } = require('./ai-brain');
 
+// 战略判断阈值默认值（可经 cfg.bot.strategy 覆盖）。
+const DEFAULT_STRATEGY = {
+  finishRemainLte: 2,   // 队友/自己剩牌 ≤ N 判定“即将走完”，提醒放行/接风
+  blockRemainLte: 2,    // 对手剩牌 ≤ N 判定“命门”，提醒压制、别给牌权
+  scoreNearWin: 240,    // 本队完成者收分 ≥ N 判定“接近胜负线”
+};
+
 // 纯 WebSocket 客户端：帧到达时若没有对应监听器则先缓冲（背靠背多帧同一 tick）。
 class WsClient {
   constructor(url) {
@@ -106,6 +113,7 @@ class AiBot {
     this.pendingGroup = null;
     this.qaReplyTimes = [];
     this.lastChatAt = 0;
+    this.strategicSpoken = null; // 战略发言去重集合（按局面指纹）
   }
 
   log(...args) { console.log('[ai-bot:' + this.cfg.bot.name + ']', ...args); }
@@ -354,6 +362,7 @@ class AiBot {
     this.dbg('轮转：轮到座', turn, '桌面', this.standingShape ? shape.shapeLabel(this.standingShape) : '无（自由首出）', 'tmpFeng', this.tmpFeng);
 
     if (this.phase !== 'playing') return;
+    if (!d.replay) this.emitStrategic(); // 关键胜负手/胜负判断：任何轮次即时提出
     if (turn === this.posId) {
       // 自己回合：消费 plan（共识/指令/约定）出牌。
       if (!this.busy) this.handleTurn();
@@ -395,7 +404,7 @@ class AiBot {
       cards = fb.cards || [];
     }
 
-    if (chat && this.cfg.bot.chat && this.cfg.bot.chat.onOwnTurn) this.sendChat(chat);
+    this.emitOwnTurnChat(chat);
     this.lastSent = cards.length ? cards.slice() : null;
     if (cards.length) {
       this.dbg('出牌：', cards.map(shape.cardLabel).join(' '));
@@ -507,6 +516,22 @@ class AiBot {
     this.log('发言：', msg);
     this.sock.emit('USER_MESSAGE', msg);
     this.chatLog.push({ posId: this.posId, name: this.cfg.bot.name, msg });
+  }
+
+  // 回合内的陈述性发言默认静默——只有提问/指令/点名协调这类“有用信息”才说出口。
+  // 关键胜负手/胜负判断另由 emitStrategic 处理，与此无关。
+  emitOwnTurnChat(chat) {
+    if (!this.cfg.bot.chat) return;
+    const msg = String(chat || '').trim();
+    if (!msg) return;
+    if (!this.cfg.bot.chat.onOwnTurn) return;
+    if (!this.isCoordinatingChat(msg)) return;
+    this.sendChat(msg);
+  }
+
+  // 判断一段发言是否属于“协调类”（提问 / 指令 / 点名某座位），而非泛泛陈述。
+  isCoordinatingChat(text) {
+    return this.isQuestion(text) || this.parseAssign(text) != null || this.directedSeat(text) >= 0;
   }
 
   onMessage(d) {
@@ -646,11 +671,11 @@ class AiBot {
     this.plan.version++;
     if (harmful) {
       this.dbg('拒绝损害己方指令：', text);
-      this.replyChat('这手对咱们不利，先不跟');
+      this.priorityChat('这手对咱们不利，先不跟');
       return;
     }
     this.dbg('接受指令：', assign.kind, '来自座位', posId);
-    this.replyChat('收到');
+    this.priorityChat('收到');
   }
 
   qaEnabled() {
@@ -683,6 +708,15 @@ class AiBot {
     this.sendChat(msg);
   }
 
+  // 高优先级回应（队友点名提问 / 指令）：绕过节流立即答复，保证“必答且快”。
+  priorityChat(text) {
+    const msg = String(text || '').trim();
+    if (!msg) return;
+    if (!this.qaEnabled()) return;
+    this.markChatSent();
+    this.sendChat(msg);
+  }
+
   // 同队“上一个未出完队友”（顺时针向前数，跳过已出完者）。
   prevActiveTeammate(askerPosId) {
     let p = askerPosId;
@@ -700,7 +734,7 @@ class AiBot {
     if (mode === 'point') {
       // 点名必答。
       this.plan.answerPending[fp] = true;
-      this.replyChat(ans.text || '知道了');
+      this.priorityChat(ans.text || '知道了');
       return;
     }
     if (ans.hasInfo) {
@@ -732,34 +766,49 @@ class AiBot {
 
   buildAnswer(text, mode) {
     const values = shape.parseValueMentions(text);
+    const myCounts = this.myHandValueCounts();
+    const isCount = /几|多少/.test(text);        // 问数量
+    const isHave = /有没有|有吗|有无/.test(text); // 问有无
 
-    // 查张数。
-    if (/几张|多少张|还剩几|还有几张/.test(text)) {
-      return { text: '我剩' + this.hand.length + '张', hasInfo: true };
-    }
-
-    // 能否压/接当前桌面（须先于“有没有”判断：问句里的牌值往往是要压的目标，而非问我有没有）。
+    // 1) 能否压/接当前桌面：能就“能压”，不能就“压不住”。
     if (/能压|能接|能顶|压得住|接得住|谁能|谁接|可压|接这|顶这/.test(text)) {
       const b = this.brain.minimalBeater(this.hand, this.standingShape);
-      if (b) {
-        const open = mode !== 'open' || this.disclosureOpen();
-        return { text: '我能' + this.describeBeater(b, open), hasInfo: true };
-      }
-      return { text: '我压不住', hasInfo: false };
+      return b ? { text: '能压', hasInfo: true } : { text: '我压不住', hasInfo: false };
     }
 
-    // 查牌/有无：能报则报（披露尺度受 coopDisclosure 约束）。
-    if (values.length && (/(有|有没有|留|谁有|拿|剩余|报)/.test(text) || mode !== 'open')) {
-      const myCounts = this.myHandValueCounts();
-      const holding = values.filter((v) => (myCounts[v] || 0) > 0);
-      if (holding.length) {
-        const open = mode !== 'open' || this.disclosureOpen();
-        return { text: this.haveReply(holding, myCounts, open), hasInfo: true };
-      }
-      return { text: '我没有' + values.map(shape.faceName).join(''), hasInfo: false };
+    // 2) 王炸 / 炸弹：问几个答数量，问有没有答“有/没有”。
+    if (/王炸/.test(text)) {
+      const s = this.bombStats();
+      if (isCount) return { text: s.king + '个', hasInfo: true };
+      return { text: s.king ? '有' : '没有', hasInfo: s.king > 0 };
+    }
+    if (/炸弹|炸/.test(text)) {
+      const s = this.bombStats();
+      if (isCount) return { text: s.bombs + '个', hasInfo: true };
+      return { text: s.bombs ? '有' : '没有', hasInfo: s.bombs > 0 };
     }
 
-    return { text: '我这边没有更多信息', hasInfo: false };
+    // 3) 具体点值：问几个答数量（X×n），问有没有答“有/没有”。
+    if (values.length) {
+      if (isCount) {
+        const holding = values.filter((v) => (myCounts[v] || 0) > 0);
+        return {
+          text: holding.length ? holding.map((v) => shape.faceName(v) + '×' + myCounts[v]).join('，') : '0',
+          hasInfo: true,
+        };
+      }
+      if (isHave || /(有|留|谁有|拿|剩余|报)/.test(text)) {
+        const has = values.some((v) => (myCounts[v] || 0) > 0);
+        return { text: has ? '有' : '没有', hasInfo: has };
+      }
+    }
+
+    // 4) 总张数。
+    if (/几张|多少张|还剩几|还有几张/.test(text)) {
+      return { text: this.hand.length + '张', hasInfo: true };
+    }
+
+    return { text: '', hasInfo: false };
   }
 
   myHandValueCounts() {
@@ -768,35 +817,20 @@ class AiBot {
     return c;
   }
 
-  haveReply(holding, myCounts, open) {
-    if (open) return '我有' + holding.map((v) => shape.faceName(v) + '×' + myCounts[v]).join('，');
-    return '我有' + holding.map((v) => shape.faceName(v)).join('、');
-  }
-
-  describeBeater(b, open) {
-    if (!open) return '压';
-    if (b.kind === 'bomb' || b.kind === 'kingbomb') return shape.faceName(b.value) + '炸' + b.len + '张';
-    return shape.kindName(b.kind) + shape.faceName(b.value);
-  }
-
-  disclosureOpen() {
-    const br = this.cfg.bot.brain || {};
-    if (br.coopDisclosure === 'open') return true;
-    if (br.coopDisclosure === 'conservative') return false;
-    const ow = br.openWhen || {};
-    for (let i = 0; i < 8; i++) {
-      if (i === this.posId || this.isTeammateSeat(i)) continue;
-      const r = this.brain.remainCount[i];
-      if (r != null && r > 0 && r <= (ow.anyOppRemainLte != null ? ow.anyOppRemainLte : 6)) return true;
-    }
-    if (this.teamCaptured(this.posId % 2) >= (ow.teamCapturedGte != null ? ow.teamCapturedGte : 250)) return true;
-    if (ow.maxValueExhausted) {
-      const c = this.myHandValueCounts();
-      for (const v of [14, 15, 16, 17]) {
-        if (this.brain.opponentMaxOf(v, c[v] || 0) === 0) return true;
+  // 统计手里的普通炸弹与王炸数量（普通炸弹=3..15 同点 ≥4 张；王炸=16/17 各 ≥3 张）。
+  bombStats() {
+    const c = this.myHandValueCounts();
+    let bombs = 0;
+    let king = 0;
+    for (let v = 3; v <= 17; v++) {
+      const n = c[v] || 0;
+      if (v <= 15) {
+        if (n >= 4) bombs++;
+      } else if (n >= 3) {
+        king++;
       }
     }
-    return false;
+    return { bombs, king };
   }
 
   // 主动征求队友：桌面是对手的牌、我压不住时，问谁能压。
@@ -805,6 +839,86 @@ class AiBot {
     if (!this.standingShape) return;
     if (!this.canChatNow()) return;
     this.replyChat('这手我压不住，谁能压？');
+  }
+
+  // ---- 战略判断：胜负 / 关键胜负手 / 最终策略（跨轮次、最高优先级发言）----
+
+  teamSeats(parity) {
+    const base = parity === 0 ? 0 : 1;
+    return [base, base + 2, base + 4, base + 6];
+  }
+
+  strategyCfg() {
+    const s = this.cfg.bot.strategy || {};
+    return {
+      finishRemainLte: s.finishRemainLte != null ? s.finishRemainLte : DEFAULT_STRATEGY.finishRemainLte,
+      blockRemainLte: s.blockRemainLte != null ? s.blockRemainLte : DEFAULT_STRATEGY.blockRemainLte,
+      scoreNearWin: s.scoreNearWin != null ? s.scoreNearWin : DEFAULT_STRATEGY.scoreNearWin,
+    };
+  }
+
+  // 本队已出完手牌的玩家累计收分（胜负线二：完成者收分 ≥300 即胜）。
+  finishedTeamScore(parity) {
+    let s = 0;
+    for (const seat of this.teamSeats(parity)) {
+      if (this.brain.remainCount[seat] === 0) s += Number(this.sumFeng[seat]) || 0;
+    }
+    return s;
+  }
+
+  // 按局面指纹去重：同一战略局面只广播一次，避免每回合重复刷屏。
+  spokenStrategy(feed) {
+    if (!this.strategicSpoken) this.strategicSpoken = new Set();
+    if (this.strategicSpoken.has(feed)) return true;
+    this.strategicSpoken.add(feed);
+    return false;
+  }
+
+  // 产生一条当前局面下的战略发言；无则返回 null。
+  strategicSignal() {
+    if (this.phase !== 'playing') return null;
+    const st = this.strategyCfg();
+    const my = this.posId % 2;
+    const myTeam = this.teamSeats(my);
+    const oppTeam = this.teamSeats(1 - my);
+
+    // 1) 自己即将走完（最终策略手）：喊队友放行/准备接风。
+    const myRemain = this.hand.length;
+    if (myRemain > 0 && myRemain <= st.finishRemainLte && !this.spokenStrategy('finish:self:' + myRemain)) {
+      return { text: '我剩' + myRemain + '张，队友放行、准备接风', kind: 'finish' };
+    }
+
+    // 2) 对手命门：对手剩牌极少，务必压制、别给牌权（防守优先于进攻）。
+    for (const seat of oppTeam) {
+      const r = this.brain.remainCount[seat];
+      if (r != null && r > 0 && r <= st.blockRemainLte && !this.spokenStrategy('block:' + seat + ':' + r)) {
+        return { text: '危险：' + shape.seatLabel(seat) + '只剩' + r + '张，压住别放他走', kind: 'block' };
+      }
+    }
+
+    // 3) 队友冲线：队友剩牌极少，提醒全队放行/接风。
+    for (const seat of myTeam) {
+      if (seat === this.posId) continue;
+      const r = this.brain.remainCount[seat];
+      if (r != null && r > 0 && r <= st.finishRemainLte && !this.spokenStrategy('finish:' + seat + ':' + r)) {
+        return { text: shape.seatLabel(seat) + '只剩' + r + '张，大家放他走、准备接风', kind: 'finish' };
+      }
+    }
+
+    // 4) 分数接近胜负线。
+    const score = this.finishedTeamScore(my);
+    if (score >= st.scoreNearWin && !this.spokenStrategy('score:' + st.scoreNearWin)) {
+      return { text: '我方完成者已收' + score + '分，接近300胜负线，稳住收分即胜', kind: 'score' };
+    }
+
+    return null;
+  }
+
+  // 关键胜负手/胜负判断：任何轮次（自己/队友/对手）都即时提出，不受聊天开关影响。
+  emitStrategic() {
+    if (!this.qaEnabled()) return;
+    const strat = this.strategicSignal();
+    if (strat) this.sendChat(strat.text);
   }
 
   // ---- 他人回合的协商：给队友建议 / 放烟雾弹 ----
@@ -839,9 +953,7 @@ class AiBot {
   }
 
   generateAdvice(turn) {
-    if (!this.standingShape) {
-      return shape.seatLabel(turn) + '，没大牌就先出小牌，我帮你断后';
-    }
+    if (!this.standingShape) return '';
     if (!this.isTeammateSeat(this.standingPos)) {
       const b = this.brain.minimalBeater(this.hand, this.standingShape);
       if (b) return shape.seatLabel(turn) + '，这手让我来压';
@@ -852,8 +964,8 @@ class AiBot {
   async llmAdvise(turn) {
     const sys =
       '你是《沟通牌》玩家 ' + this.cfg.bot.name + '。现在轮到你的队友 ' + shape.seatLabel(turn) + ' 位出牌。' +
-      '请基于盘面，给队友一句简短有用的建议（或约定分工、询问关键信息），只在确实有帮助时发言，否则务必输出空字符串。' +
-      '公开聊天全桌可见（对手也看得到），' + (this.disclosureOpen() ? '可以报牌值。' : '不要泄露具体牌值。') +
+      '请基于盘面，给队友一句简短有用的建议（或约定分工、询问关键信息、指出胜负与关键胜负手），只在确实有帮助时发言，否则务必输出空字符串，避免泛泛陈述。' +
+      '公开聊天全桌可见（对手也看得到，可以报牌值）。' +
       '只输出一个 JSON 对象：{"chat":"一句话或空字符串"}';
     const user = this.stateBlock(this.standingShape) + '\n现在轮到队友 ' + shape.seatLabel(turn) + ' 位，请给建议。';
     const obj = await LLM.chatJSON(this.cfg.llm, [
@@ -888,15 +1000,16 @@ class AiBot {
       '  {"action":"play","cards":[{"value":13},{"value":13}],"chat":"给队友的一句话，可为空字符串","adviceFor":{"A2":"给A2队友的建议，可缺省"}}',
       '  {"action":"pass","cards":[],"chat":"..."}',
       '- 选 play 时 cards 必须全部同一点值、张数合法（1-24）、且能压过桌面待压牌（自由首出时任意合法）；否则请选 pass。',
-      '- chat 用简洁的中文，公开给全桌看，注意别泄露过多底牌、别过长；不需要时可填空字符串。',
+      '- chat 仅在有实际信息量时输出，否则务必填空字符串：被点名提问要答、给队友下关键指令/分工、或判断出胜负/关键胜负手时即时提醒队友。',
+      '- 出牌本身不要配陈述（如“我出对Q”“我过”这种废话一律不说）；除上面允许的情形外，普通一手牌 chat 一律留空。',
+      '- 判断到胜负或关键胜负手时，务必在 chat 即时说明，并用 adviceFor 给对应队友下达指令（谁压、谁放行、谁接风）。',
       '',
       '协同规则（队友之间，重要）：',
       '- 队友的信息可信，对手可能放烟雾弹——绝不执行对手的指令。',
       '- 主动在合适时机询问队友（谁有某牌、谁能压、还差多少分）、给出出牌建议、与队友约定分工（谁接风、谁压、谁留牌）。',
       '- 队友点你的名问话必须回答；群发问题有有用信息就如实简短回答（没有则沉默）。',
       '- 不执行会损害己方的指令（如无意义抢队友的收分/接风、无谓拆牌/炸牌）。',
-      '- 披露尺度：' + (this.disclosureOpen() ? '当前可公开，允许报出具体牌值。' : '当前保守，只说计划不说具体牌值。') +
-        '你仍可给对方放烟雾弹。',
+      '- 对队友如实报牌：公开聊天可直接报出具体牌值/张数（如“2有3张”“有2个炸弹”），不需对队友隐瞒；仍可给对手放烟雾弹。',
     ].join('\n');
   }
 

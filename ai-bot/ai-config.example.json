@@ -26,15 +26,16 @@
       "reconnect": { "enabled": true, "maxDelayMs": 10000 },
       "keepPlaying": true,
       "verbose": false,
-      "brain": { "handInference": "estimate", "coopDisclosure": "auto" },
-      "qa": { "enabled": true, "minIntervalMs": 2000, "maxReplyPerMin": 6, "groupSilenceMs": 4000 }
+      "brain": { "handInference": "estimate" },
+      "qa": { "enabled": true, "minIntervalMs": 2000, "maxReplyPerMin": 6, "groupSilenceMs": 4000 },
+      "strategy": { "finishRemainLte": 2, "blockRemainLte": 2, "scoreNearWin": 240 }
     },
     {
       "name": "AI阿强",
       "join": { "mode": "fixed", "deskId": 1, "posId": 2 },
       "host": { "autoStart": false, "fillBots": false },
       "chat": { "onOwnTurn": true, "onOthersTurn": true, "minIntervalMs": 8000 },
-      "brain": { "handInference": "full", "coopDisclosure": "open" },
+      "brain": { "handInference": "full" },
       "verbose": false
     }
   ]
